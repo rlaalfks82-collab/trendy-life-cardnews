@@ -23,17 +23,16 @@ if not api_key and "GEMINI_API_KEY" in st.secrets:
 
 client = genai.Client(api_key=api_key)
 
-st.set_page_config(page_title="트렌디라이프 뉴스 - 스마트 카드뉴스 생성기", layout="wide")
+st.set_page_config(page_title="트렌디라이프 뉴스 - 스마트 멀티기사 카드뉴스", layout="wide")
 
 # 사이드바 설정
 st.sidebar.header("🎨 트렌디라이프 옵션")
 
-# 이미지 모드 선택 분기
 image_mode = st.sidebar.radio(
     "📸 이미지 생성 모드 선택",
     [
-        "🎨 일반 맞춤형 모드 (기사 대표사진 1장 + 슬라이드별 맞춤 실사)",
-        "🎬 드라마/영화/콘텐츠 모드 (기사 본문 스틸컷·포스터 적극 활용)"
+        "🎬 드라마/영화/콘텐츠 모드 (두 기사의 스틸컷·포스터 집중 활용)",
+        "🎨 일반 맞춤형 모드 (기사 대표사진 + 슬라이드별 맞춤 실사)"
     ],
     index=0
 )
@@ -46,13 +45,17 @@ caption_length = st.sidebar.radio("인스타 캡션 길이", ["짧게 (3~4줄 �
 # 헤더
 st.markdown("""
 <div style="text-align: center; line-height: 1.35; margin-bottom: 25px;">
-    <h2 style="color: #0F172A; margin-bottom: 8px; font-weight: 800;">🔥 트렌디라이프 스마트 카드뉴스 생성기</h2>
-    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">기사 성격에 맞춰 원문 스틸컷 활용 또는 고화질 맞춤 이미지를 자동 합성합니다</p>
+    <h2 style="color: #0F172A; margin-bottom: 8px; font-weight: 800;">🔥 트렌디라이프 멀티기사 카드뉴스 생성기</h2>
+    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">2개 기사의 스틸컷과 팩트를 통합 분석하여 고감도 피드를 완성합니다</p>
 </div>
 """, unsafe_allow_html=True)
 st.write("---")
 
-news_url = st.text_input("🔗 뉴스 기사 링크(URL)를 입력하세요.", placeholder="뉴스 기사 링크를 붙여넣고 분석하기를 눌러주세요.")
+col_url1, col_url2 = st.columns(2)
+with col_url1:
+    news_url_1 = st.text_input("🔗 첫 번째 뉴스 기사 링크 (필수)", placeholder="메인 기사 URL을 입력하세요.")
+with col_url2:
+    news_url_2 = st.text_input("🔗 두 번째 뉴스 기사 링크 (선택 / 추가 스틸컷 확보)", placeholder="관련 추가 기사 URL을 입력하세요.")
 
 # 세션 상태 캐시
 if "article_data" not in st.session_state:
@@ -69,7 +72,6 @@ if "zip_filename" not in st.session_state:
     st.session_state.zip_filename = ""
 
 def load_fonts(t_sz, c_sz):
-    # 리눅스(Streamlit Cloud) 및 윈도우 환경 모두 지원하는 한글 폰트 탐색 경로
     font_candidates_bold = [
         "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
@@ -104,7 +106,6 @@ def load_fonts(t_sz, c_sz):
         except:
             continue
 
-    # 폰트를 못 찾았을 경우 대체
     if not title_font:
         title_font = ImageFont.load_default()
     if not content_font:
@@ -116,7 +117,6 @@ def load_fonts(t_sz, c_sz):
 
     return (title_font, content_font, badge_font, page_font)
 
-# 이미지 다운로더 (URL -> PIL Image)
 def download_image_from_url(img_url):
     if not img_url:
         return None
@@ -129,12 +129,10 @@ def download_image_from_url(img_url):
         pass
     return None
 
-# 키워드 기반 고화질 스톡 이미지 다운로더
 def fetch_keyword_stock_image(keyword, fallback_img=None):
     headers = {"User-Agent": "Mozilla/5.0"}
     clean_keyword = urllib.parse.quote(keyword.strip()) if keyword else "editorial"
     
-    # 1. Unsplash 고화질 검색
     search_url = f"https://source.unsplash.com/1080x1350/?{clean_keyword}"
     try:
         res = requests.get(search_url, headers=headers, timeout=5, allow_redirects=True)
@@ -143,7 +141,6 @@ def fetch_keyword_stock_image(keyword, fallback_img=None):
     except:
         pass
 
-    # 2. Picsum 백업
     try:
         seed_hash = abs(hash(keyword)) % 1000
         res = requests.get(f"https://picsum.photos/seed/{seed_hash}/1080/1350", headers=headers, timeout=5)
@@ -152,7 +149,6 @@ def fetch_keyword_stock_image(keyword, fallback_img=None):
     except:
         pass
 
-    # 3. 원문 이미지 블러 처리 백업
     if fallback_img:
         try:
             return fallback_img.copy().filter(ImageFilter.GaussianBlur(15))
@@ -161,9 +157,7 @@ def fetch_keyword_stock_image(keyword, fallback_img=None):
 
     return Image.new("RGB", (1080, 1350), color=(25, 33, 44))
 
-# =============================================
-# Pydantic 스키마 정의
-# =============================================
+# Pydantic 모델
 class SlideItem(BaseModel):
     page: int
     headline: str
@@ -177,7 +171,6 @@ class CardNewsResponse(BaseModel):
 class HeadlineCandidates(BaseModel):
     titles: List[str]
 
-# 1단계 제목 생성 전용 호출 함수 (최신 모델 Fallback)
 def call_gemini_headlines(prompt):
     candidate_models = ["gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-3.5-flash"]
     last_err = None
@@ -205,7 +198,6 @@ def call_gemini_headlines(prompt):
                     break
     raise Exception(f"헤드라인 생성 실패: {last_err}")
 
-# 2단계 카드뉴스 전체 스크립트 전용 호출 함수 (최신 모델 Fallback)
 def call_gemini_script(prompt):
     candidate_models = ["gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-3.5-flash"]
     last_err = None
@@ -233,7 +225,6 @@ def call_gemini_script(prompt):
                     break
     raise Exception(f"스크립트 생성 실패: {last_err}")
 
-# 카드 렌더링 엔진 (4:5 풀스크린 + 가독성 다크 그라데이션)
 def render_trendportal_card(page, title, content, base_img, fonts, tag_text="TREND ISSUE"):
     title_font, content_font, tag_font, page_font = fonts
     width, height = 1080, 1350
@@ -347,38 +338,56 @@ def render_trendportal_card(page, title, content, base_img, fonts, tag_text="TRE
     return card
 
 # ---------------------------------------------
-# 1단계: 기사 분석
+# 1단계: 기사 2개 통합 분석
 # ---------------------------------------------
 if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="primary", use_container_width=True):
-    if not news_url.strip():
-        st.warning("뉴스 기사 링크를 입력해 주세요.")
+    if not news_url_1.strip():
+        st.warning("첫 번째 뉴스 기사 링크를 입력해 주세요.")
     else:
-        with st.spinner("기사 본문과 포함된 사진들을 분석하고 있습니다..."):
+        with st.spinner("기사 본문과 스틸컷 이미지들을 추출하고 있습니다..."):
             try:
-                article = Article(news_url, language='ko')
-                article.download()
-                article.parse()
+                # 기사 1 파싱
+                art1 = Article(news_url_1, language='ko')
+                art1.download()
+                art1.parse()
 
-                # 기사 내 유효한 모든 이미지 URL 추출 (드라마/영화 스틸컷용)
-                valid_images = [img for img in article.images if img.startswith("http") and not img.endswith(".svg")]
+                combined_title = art1.title
+                combined_text = f"[기사 1]\n{art1.text}"
+                all_images = [img for img in art1.images if img.startswith("http") and not img.endswith(".svg")]
+                top_image = art1.top_image
+
+                # 기사 2가 있을 경우 통합
+                if news_url_2.strip():
+                    try:
+                        art2 = Article(news_url_2, language='ko')
+                        art2.download()
+                        art2.parse()
+                        combined_text += f"\n\n[기사 2]\n{art2.text}"
+                        for img in art2.images:
+                            if img.startswith("http") and not img.endswith(".svg") and img not in all_images:
+                                all_images.append(img)
+                        if not top_image and art2.top_image:
+                            top_image = art2.top_image
+                    except Exception as e:
+                        st.warning(f"두 번째 기사 분석에 실패하여 첫 번째 기사로만 진행합니다: {e}")
 
                 st.session_state.article_data = {
-                    "title": article.title,
-                    "text": article.text,
-                    "top_image": article.top_image,
-                    "all_images": valid_images
+                    "title": combined_title,
+                    "text": combined_text,
+                    "top_image": top_image,
+                    "all_images": all_images
                 }
 
                 cand_prompt = f"""
                 당신은 인스타그램 트렌드 뉴스 채널(@trendy.life_newwws)의 수석 카피라이터입니다.
-                독자의 시선을 사로잡는 강력한 후킹 제목 3가지를 만드세요.
+                기사 내용을 토대로 독자의 시선을 사로잡는 강력한 후킹 제목 3가지를 만드세요.
                 - 특수문자나 이모지는 절대 사용하지 말고, 따옴표/물음표만 사용하세요.
 
-                기사 원문 제목: {article.title}
-                기사 본문 요약: {article.text[:1200]}
+                기사 원문 제목: {combined_title}
+                기사 본문 요약: {combined_text[:1400]}
                 """
                 res = call_gemini_headlines(cand_prompt)
-                st.session_state.headline_candidates = res.get("titles", [article.title])
+                st.session_state.headline_candidates = res.get("titles", [combined_title])
                 st.session_state.full_script = None
                 st.session_state.rendered_images = []
                 st.session_state.zip_data = None
@@ -405,7 +414,6 @@ if st.session_state.headline_candidates:
             각 슬라이드의 내용과 가장 잘 어울리는 검색 키워드를 'img_keyword'에 영어 1~2단어로 작성하세요.
             슬라이드 본문(subhead)은 2~3줄 내외(120자 이내)로 작성하고 이모지는 포함하지 마세요.
 
-            기사 원문 제목: {art['title']}
             기사 내용: {art['text']}
             """
             try:
@@ -419,13 +427,12 @@ if st.session_state.headline_candidates:
                 saved_images = []
                 top_img_original = download_image_from_url(art.get("top_image"))
 
-                # 드라마/영화 모드일 때 사용할 기사 내 스틸컷 이미지들 미리 다운로드
+                # 기사 내 모든 스틸컷 풀 다운로드 및 필터링
                 article_images_pool = []
-                if "드라마/영화" in image_mode:
-                    for img_url in art.get("all_images", []):
-                        img_obj = download_image_from_url(img_url)
-                        if img_obj and (img_obj.width >= 400 or img_obj.height >= 400):
-                            article_images_pool.append(img_obj)
+                for img_url in art.get("all_images", []):
+                    img_obj = download_image_from_url(img_url)
+                    if img_obj and (img_obj.width >= 350 or img_obj.height >= 350):
+                        article_images_pool.append(img_obj)
 
                 for idx, slide in enumerate(data["slides"]):
                     page = slide["page"]
@@ -435,9 +442,8 @@ if st.session_state.headline_candidates:
 
                     base_img = None
 
-                    # 모드별 이미지 배치 분기
+                    # 이미지 배치 로직
                     if "드라마/영화" in image_mode:
-                        # 기사 본문에 수집된 스틸컷/포스터 사진들을 순서대로 우선 사용
                         if idx < len(article_images_pool):
                             base_img = article_images_pool[idx]
                         elif top_img_original:
@@ -445,9 +451,10 @@ if st.session_state.headline_candidates:
                         else:
                             base_img = fetch_keyword_stock_image(keyword, fallback_img=top_img_original)
                     else:
-                        # 일반 맞춤형 모드: 1번은 대표사진, 2~5번은 슬라이드 내용 맞춤 고화질 스톡
                         if page == 1 and top_img_original:
                             base_img = top_img_original
+                        elif page == 2 and len(article_images_pool) > 0:
+                            base_img = article_images_pool[0]
                         else:
                             base_img = fetch_keyword_stock_image(keyword, fallback_img=top_img_original)
 
@@ -479,7 +486,7 @@ if st.session_state.headline_candidates:
 # 3단계: 화면 표시
 # ---------------------------------------------
 if st.session_state.rendered_images and st.session_state.zip_data:
-    st.success("🎉 선택하신 이미지 모드에 맞춰 고화질 피드 5장이 완성되었습니다!")
+    st.success("🎉 두 기사의 스틸컷과 팩트를 반영한 피드 5장이 완성되었습니다!")
 
     st.download_button(
         label="📦 트렌디라이프 피드 5장 + 캡션 한 번에 다운로드 (ZIP)",
