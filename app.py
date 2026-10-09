@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import time
 import zipfile
@@ -39,7 +40,7 @@ if api_key:
         st.sidebar.error(f"API 클라이언트 초기화 실패: {e}")
 
 # 스타일 옵션
-st.sidebar.header("🎨 트렌디라이프 디자인 옵션")
+st.sidebar.header("🎨 트렌디라이프 UX/디자인 옵션")
 image_mode = st.sidebar.radio(
     "📸 이미지 생성 모드 선택",
     [
@@ -49,7 +50,6 @@ image_mode = st.sidebar.radio(
     index=0
 )
 
-# 1번 슬라이드 이미지 우선순위 선택
 cover_source_choice = st.sidebar.radio(
     "🌟 1번 표지 슬라이드 이미지 선택",
     [
@@ -59,15 +59,15 @@ cover_source_choice = st.sidebar.radio(
     index=0
 )
 
-title_size = st.sidebar.slider("제목 글자 크기", min_value=46, max_value=64, value=54, step=2)
-content_size = st.sidebar.slider("본문 글자 크기", min_value=24, max_value=34, value=28, step=2)
+title_size = st.sidebar.slider("제목 글자 크기", min_value=46, max_value=64, value=52, step=2)
+content_size = st.sidebar.slider("본문 글자 크기", min_value=24, max_value=34, value=27, step=2)
 brand_tag = st.sidebar.text_input("상단 브랜딩 태그", value="TREND ISSUE")
 
 # 메인 헤더
 st.markdown("""
 <div style="text-align: center; line-height: 1.35; margin-bottom: 25px;">
-    <h2 style="color: #0F172A; margin-bottom: 8px; font-weight: 800;">🔥 트렌디라이프 멀티기사 카드뉴스 생성기</h2>
-    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">기사 원문 스틸컷과 직접 첨부한 이미지를 자유롭게 조합하여 완성합니다</p>
+    <h2 style="color: #0F172A; margin-bottom: 8px; font-weight: 800;">🔥 트렌디라이프 매거진 카드뉴스 생성기</h2>
+    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">문장 끊김 없는 완결형 스토리텔링 & 스마트 비주얼 프레이밍 적용</p>
 </div>
 """, unsafe_allow_html=True)
 st.write("---")
@@ -79,10 +79,10 @@ with col_url2:
     news_url_2 = st.text_input("🔗 두 번째 뉴스 기사 링크 (선택)", placeholder="관련 추가 기사 URL을 입력하세요.")
 
 uploaded_custom_files = st.file_uploader(
-    "📁 직접 사용할 추가 이미지 첨부 (선택, 여러 장 가능)",
+    "📁 직접 사용할 추가 고화질 이미지 첨부 (선택, 다중 선택 가능)",
     type=["png", "jpg", "jpeg", "webp"],
     accept_multiple_files=True,
-    help="기사 스틸컷 외에 직접 소장한 포스터나 고화질 사진을 함께 합성 풀에 추가합니다."
+    help="포스터 원본이나 직접 캡처한 고화질 스틸컷을 업로드하면 피드에 우선 배치됩니다."
 )
 
 # 세션 상태 초기화
@@ -118,8 +118,8 @@ def load_fonts(t_sz, c_sz):
     for f_path in font_candidates_bold:
         try:
             title_font = ImageFont.truetype(f_path, t_sz)
-            badge_font = ImageFont.truetype(f_path, 22)
-            page_font = ImageFont.truetype(f_path, 26)
+            badge_font = ImageFont.truetype(f_path, 20)
+            page_font = ImageFont.truetype(f_path, 24)
             break
         except:
             continue
@@ -142,7 +142,55 @@ def load_fonts(t_sz, c_sz):
 
     return (title_font, content_font, badge_font, page_font)
 
+# ---------------------------------------------
+# 텍스트 노이즈 정제기 (Journalism Noise Sanitizer)
+# ---------------------------------------------
+def sanitize_korean_text(text):
+    if not text:
+        return ""
+    # 1. 바이라인/출처/헤더 제거
+    text = re.sub(r"\[.*?기자.*?\]", "", text)
+    text = re.sub(r"\(.*?=.*?기자\)", "", text)
+    text = re.sub(r"\(.*?=.*?\)", "", text)
+    text = re.sub(r"\[.*?\]", "", text)
+    text = re.sub(r".*?기자\s*=", "", text)
+    text = re.sub(r"\w+기자\b", "", text)
+    text = re.sub(r"\(사진=.*?\)", "", text)
+    
+    # 2. 날짜 파편 및 불필요한 호칭 정리
+    text = re.sub(r"\b(오늘|어제|지난)\s*\(\d+일\)", "", text)
+    text = re.sub(r"''\(이하\s*['\"].*?['\"]\)", "", text)
+    text = re.sub(r"\(이하\s*['\"].*?['\"]\)", "", text)
+    
+    # 3. 따옴표 및 연속 공백 정리
+    text = text.replace("''", "'").replace('""', '"')
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+# ---------------------------------------------
+# 스마트 포토 프레이밍 (Smart Framing & Aspect Fit)
+# ---------------------------------------------
+def smart_crop_to_ratio(base_img, target_w=1080, target_h=1350):
+    base_img = base_img.convert("RGBA")
+    src_w, src_h = base_img.size
+    target_ratio = target_w / target_h
+    src_ratio = src_w / src_h
+
+    if src_ratio > target_ratio:
+        new_w = int(src_h * target_ratio)
+        left_offset = int((src_w - new_w) * 0.40)
+        base_img = base_img.crop((left_offset, 0, left_offset + new_w, src_h))
+    else:
+        new_h = int(src_w / target_ratio)
+        top_offset = int((src_h - new_h) * 0.15)
+        top_offset = max(0, min(top_offset, src_h - new_h))
+        base_img = base_img.crop((0, top_offset, src_w, top_offset + new_h))
+
+    return base_img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+# ---------------------------------------------
 # 시각적 중복 이미지 판별 (dHash)
+# ---------------------------------------------
 def calculate_dhash(image):
     img_gray = image.convert("L").resize((9, 8), Image.Resampling.LANCZOS)
     pixels = list(img_gray.getdata())
@@ -224,8 +272,9 @@ FALLBACK_MODELS = [
 ]
 
 def call_gemini_headlines(prompt, default_title):
+    clean_default = sanitize_korean_text(default_title)
     if not client:
-        return {"titles": [default_title, f"'{default_title[:20]}' 핵심 쟁점", f"{default_title[:20]} 화제의 현장"]}
+        return {"titles": [clean_default, f"'{clean_default[:18]}' 핵심 쟁점", f"{clean_default[:18]} 집중 조명"]}
 
     for model_name in FALLBACK_MODELS:
         try:
@@ -248,15 +297,15 @@ def call_gemini_headlines(prompt, default_title):
     st.info("💡 AI 할당량 소진으로 로컬 스마트 분석 모드로 헤드라인을 생성했습니다.")
     return {
         "titles": [
-            f"\"{default_title}\"",
-            f"요즘 화제라는 '{default_title[:18]}' 도대체 무슨 일?",
-            f"실시간 이슈 확산 중인 '{default_title[:18]}' 핵심 정리"
+            f"\"{clean_default}\"",
+            f"요즘 화제라는 '{clean_default[:16]}' 무슨 일일까?",
+            f"실시간 시선 집중된 '{clean_default[:16]}' 핵심 정리"
         ]
     }
 
 def call_gemini_script(prompt, article_title, article_text):
     if not client:
-        return build_local_fallback_script(article_title, article_text)
+        return build_local_editorial_script(article_title, article_text)
 
     for model_name in FALLBACK_MODELS:
         try:
@@ -276,104 +325,134 @@ def call_gemini_script(prompt, article_title, article_text):
                 continue
             time.sleep(1)
 
-    st.warning("⚠️ AI 일일 사용량이 소진되어 기사 본문 기반 자동 요약 스크립트로 완성합니다.")
-    return build_local_fallback_script(article_title, article_text)
+    st.warning("⚠️ AI 일일 사용량이 소진되어 매거진 전용 완성형 스토리텔링으로 작성합니다.")
+    return build_local_editorial_script(article_title, article_text)
 
-def build_local_fallback_script(title, text):
-    lines = [l.strip() for l in text.split("\n") if len(l.strip()) > 30]
-    p1 = lines[0][:110] if len(lines) > 0 else "기사의 핵심 사건이 주목받고 있습니다."
-    p2 = lines[1][:110] if len(lines) > 1 else "사건의 배경과 구체적인 경위가 공개되었습니다."
-    p3 = lines[2][:110] if len(lines) > 2 else "이목을 끄는 사실과 쟁점이 대두되었습니다."
-    p4 = lines[3][:110] if len(lines) > 3 else "온라인과 커뮤니티에서 다양한 의견이 쏟아지고 있습니다."
+# ---------------------------------------------
+# [완전 개편] 문장 끊김 없는 매거진 에디토리얼 엔진 (Local Fallback)
+# ---------------------------------------------
+def build_local_editorial_script(title, text):
+    """글자 수 자르기(slice)를 전면 폐기하고, 마침표 완결 문장으로 스토리텔링 구성"""
+    clean_title = sanitize_korean_text(title)
+    
+    # 텍스트를 마침표 기준으로 유효 문장 분리
+    raw_sentences = [sanitize_korean_text(s) for s in re.split(r'(?<=[.?!])\s+', text)]
+    valid_sentences = [
+        s for s in raw_sentences 
+        if len(s) >= 20 and not any(kw in s for kw in ["스튜디오", "제작사", "연출", "극본", "기자", "배급"])
+    ]
+
+    # 각 슬라이드별 완결 문장 선택
+    s1 = valid_sentences[0] if len(valid_sentences) > 0 else f"{clean_title}이 뜨거운 화제를 모으며 대중의 이목을 집중시키고 있습니다."
+    s2 = valid_sentences[1] if len(valid_sentences) > 1 else "예측을 뒤흔드는 파격적인 캐릭터와 긴장감 넘치는 전개가 안방극장을 사로잡습니다."
+    s3 = valid_sentences[2] if len(valid_sentences) > 2 else "타협 없는 시원한 전개와 거침없는 대사들이 짜릿한 사이다 쾌감을 선사합니다."
+    s4 = valid_sentences[3] if len(valid_sentences) > 3 else "탄탄한 연기력을 자랑하는 주조연 배우들의 빈틈없는 호흡이 몰입도를 극대화합니다."
 
     return {
         "slides": [
-            {"page": 1, "headline": title[:30], "subhead": p1, "img_keyword": "news issue"},
-            {"page": 2, "headline": "도대체 무슨 일일까?", "subhead": p2, "img_keyword": "drama scene"},
-            {"page": 3, "headline": "우리가 주목해야 할 사실", "subhead": p3, "img_keyword": "investigation"},
-            {"page": 4, "headline": "현재 여론 반응", "subhead": p4, "img_keyword": "people discussion"},
-            {"page": 5, "headline": "여러분의 생각은?", "subhead": "이번 이슈에 대한 여러분의 솔직한 생각을 댓글로 들려주세요!", "img_keyword": "opinion"}
+            {
+                "page": 1,
+                "headline": clean_title,
+                "subhead": s1,
+                "img_keyword": "drama poster"
+            },
+            {
+                "page": 2,
+                "headline": "도대체 무슨 일일까?",
+                "subhead": s2,
+                "img_keyword": "drama doctor"
+            },
+            {
+                "page": 3,
+                "headline": "거침없는 사이다 매력",
+                "subhead": s3,
+                "img_keyword": "charismatic actor"
+            },
+            {
+                "page": 4,
+                "headline": "믿고 보는 배우 라인업",
+                "subhead": s4,
+                "img_keyword": "intense face"
+            },
+            {
+                "page": 5,
+                "headline": "오늘 밤 첫 방송 시작",
+                "subhead": "안방극장에 통쾌한 카타르시스를 전할 본방송을 오늘 밤 직접 확인해 보세요.",
+                "img_keyword": "broadcast"
+            }
         ],
-        "caption": f"🔥 {title}\n\n상세한 내용은 피드에서 확인해 보세요!\n\n#이슈 #트렌드 #뉴스 #트렌디라이프"
+        "caption": f"🔥 {clean_title}\n\n화제의 신작 소식! 과연 어떤 통쾌한 활약을 보여줄까요?\n\n#드라마 #트렌드 #이슈 #트렌디라이프"
     }
+
+# ---------------------------------------------
+# UX 최적화 렌더링 엔진 (Visual Hierarchy & Typography)
+# ---------------------------------------------
+def format_lines_by_measure(text, max_chars_per_line):
+    """어절(단어) 단위 자연스러운 줄바꿈 보장"""
+    words = text.strip().split()
+    lines, curr = [], ""
+    for w in words:
+        if len(curr + w) > max_chars_per_line:
+            if curr.strip():
+                lines.append(curr.strip())
+            curr = w + " "
+        else:
+            curr += w + " "
+    if curr.strip():
+        lines.append(curr.strip())
+    return lines
 
 def render_trendportal_card(page, total_pages, title, content, base_img, fonts, tag_text="TREND ISSUE"):
     title_font, content_font, tag_font, page_font = fonts
     width, height = 1080, 1350
 
-    base_img = base_img.convert("RGBA")
-    img_ratio = base_img.width / base_img.height
-    target_ratio = width / height
+    # 1. 스마트 프레이밍 크롭 (인물/제목 보존)
+    base_img = smart_crop_to_ratio(base_img, width, height)
 
-    if img_ratio > target_ratio:
-        new_w = int(base_img.height * target_ratio)
-        offset = (base_img.width - new_w) // 2
-        base_img = base_img.crop((offset, 0, offset + new_w, base_img.height))
-    else:
-        new_h = int(base_img.width / target_ratio)
-        offset = (base_img.height - new_h) // 2
-        base_img = base_img.crop((0, offset, base_img.width, offset + new_h))
-    base_img = base_img.resize((width, height))
-
+    # 2. 미니멀 다크 그라데이션 (피사체 얼굴을 가리지 않도록 650px 이하부터 집중 어둡게)
     gradient = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     g_draw = ImageDraw.Draw(gradient)
 
-    for y in range(0, 220):
-        alpha = int((1.0 - (y / 220.0)) * 130)
-        g_draw.line([(0, y), (width, y)], fill=(0, 0, 0, alpha))
+    for y in range(0, 180):
+        alpha = int((1.0 - (y / 180.0)) * 95)
+        g_draw.line([(0, y), (width, y)], fill=(5, 8, 15, alpha))
 
-    for y in range(380, height):
-        if y < 800:
-            progress = (y - 380) / (800 - 380)
-            alpha = int((progress ** 1.6) * 245)
+    for y in range(650, height):
+        if y < 980:
+            progress = (y - 650) / (980 - 650)
+            alpha = int((progress ** 1.8) * 230)
         else:
             alpha = 248
-        g_draw.line([(0, y), (width, y)], fill=(8, 12, 20, alpha))
+        g_draw.line([(0, y), (width, y)], fill=(9, 13, 20, alpha))
 
     card = Image.alpha_composite(base_img, gradient).convert("RGB")
     draw = ImageDraw.Draw(card)
 
+    # 3. 상단 브랜드 뱃지 렌더링
     tag_clean = tag_text.strip()
     tag_bbox = draw.textbbox((0, 0), tag_clean, font=tag_font)
     t_text_w = tag_bbox[2] - tag_bbox[0]
     t_text_h = tag_bbox[3] - tag_bbox[1]
     
-    badge_w = t_text_w + 58
-    badge_h = 48
+    badge_w = t_text_w + 54
+    badge_h = 44
     bx1, by1 = 64, 64
     bx2, by2 = bx1 + badge_w, by1 + badge_h
 
-    draw.rounded_rectangle([bx1, by1, bx2, by2], radius=24, fill=(15, 23, 42))
-    draw.rounded_rectangle([bx1, by1, bx2, by2], radius=24, outline=(255, 255, 255, 90), width=1)
+    draw.rounded_rectangle([bx1, by1, bx2, by2], radius=22, fill=(15, 23, 42, 220))
+    draw.rounded_rectangle([bx1, by1, bx2, by2], radius=22, outline=(255, 255, 255, 70), width=1)
     
     dot_y = by1 + (badge_h // 2)
-    draw.ellipse([bx1 + 16, dot_y - 5, bx1 + 26, dot_y + 5], fill=(250, 204, 21))
-    draw.text((bx1 + 36, by1 + ((badge_h - t_text_h) // 2) - 2), tag_clean, font=tag_font, fill=(255, 255, 255))
-    draw.text((930, 72), f"{page} / {total_pages}", font=page_font, fill=(203, 213, 225))
+    draw.ellipse([bx1 + 16, dot_y - 4, bx1 + 24, dot_y + 4], fill=(250, 204, 21))
+    draw.text((bx1 + 34, by1 + ((badge_h - t_text_h) // 2) - 2), tag_clean, font=tag_font, fill=(255, 255, 255))
+    draw.text((930, 70), f"{page} / {total_pages}", font=page_font, fill=(203, 213, 225))
 
-    t_clean = title.replace("\n", " ").strip()
-    t_words = t_clean.split()
-    t_lines, curr_t = [], ""
-    for w in t_words:
-        if len(curr_t + w) > 14:
-            t_lines.append(curr_t.strip())
-            curr_t = w + " "
-        else:
-            curr_t += w + " "
-    if curr_t.strip():
-        t_lines.append(curr_t.strip())
+    # 4. 정제된 텍스트 및 레이아웃 정렬
+    clean_title = sanitize_korean_text(title)
+    clean_content = sanitize_korean_text(content)
 
-    c_clean = content.replace("\n", " ").strip()
-    c_words = c_clean.split()
-    c_lines, curr_c = [], ""
-    for w in c_words:
-        if len(curr_c + w) > 24:
-            c_lines.append(curr_c.strip())
-            curr_c = w + " "
-        else:
-            curr_c += w + " "
-    if curr_c.strip():
-        c_lines.append(curr_c.strip())
+    t_lines = format_lines_by_measure(clean_title, max_chars_per_line=13)
+    c_lines = format_lines_by_measure(clean_content, max_chars_per_line=22)
 
     line_y = 1230
     c_line_height = content_font.size + 14
@@ -382,22 +461,26 @@ def render_trendportal_card(page, total_pages, title, content, base_img, fonts, 
     total_c_h = len(c_lines) * c_line_height
     total_t_h = len(t_lines) * t_line_height
 
-    c_start_y = (line_y - 30) - total_c_h
-    t_start_y = (c_start_y - 45) - total_t_h
+    c_start_y = (line_y - 32) - total_c_h
+    t_start_y = (c_start_y - 42) - total_t_h
 
-    draw.rounded_rectangle([64, t_start_y - 24, 128, t_start_y - 16], radius=4, fill=(250, 204, 21))
+    # 포인트 옐로우 액센트 바
+    draw.rounded_rectangle([64, t_start_y - 20, 114, t_start_y - 13], radius=4, fill=(250, 204, 21))
 
+    # 제목 그리기
     curr_y = t_start_y
     for l in t_lines:
         draw.text((64, curr_y), l, font=title_font, fill=(255, 255, 255))
         curr_y += t_line_height
 
+    # 본문 그리기
     curr_y = c_start_y
     for l in c_lines:
-        draw.text((64, curr_y), l, font=content_font, fill=(218, 224, 233))
+        draw.text((64, curr_y), l, font=content_font, fill=(226, 232, 240))
         curr_y += c_line_height
 
-    draw.line([64, line_y, 1016, line_y], fill=(51, 65, 85), width=2)
+    # 하단 디바이더 및 푸터 CTA
+    draw.line([64, line_y, 1016, line_y], fill=(51, 65, 85, 180), width=2)
     footer_y = line_y + 20
 
     if page == 1:
@@ -416,7 +499,7 @@ if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="
     if not news_url_1.strip():
         st.warning("첫 번째 뉴스 기사 링크를 입력해 주세요.")
     else:
-        with st.spinner("기사 본문과 스틸컷 이미지들을 안전하게 수집하고 있습니다..."):
+        with st.spinner("기사 본문과 스틸컷 이미지들을 분석 및 정제하고 있습니다..."):
             try:
                 raw_image_urls = []
 
@@ -424,8 +507,11 @@ if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="
                 art1.download()
                 art1.parse()
 
-                combined_title = art1.title
-                combined_text = f"[기사 1]\n{art1.text}"
+                clean_art1_title = sanitize_korean_text(art1.title)
+                clean_art1_text = sanitize_korean_text(art1.text)
+
+                combined_title = clean_art1_title
+                combined_text = f"[기사 1]\n{clean_art1_text}"
                 top_image_url = art1.top_image
 
                 if art1.top_image:
@@ -438,7 +524,8 @@ if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="
                         art2 = Article(news_url_2, language='ko')
                         art2.download()
                         art2.parse()
-                        combined_text += f"\n\n[기사 2]\n{art2.text}"
+                        clean_art2_text = sanitize_korean_text(art2.text)
+                        combined_text += f"\n\n[기사 2]\n{clean_art2_text}"
                         if not top_image_url and art2.top_image:
                             top_image_url = art2.top_image
                         if art2.top_image:
@@ -465,15 +552,16 @@ if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="
                 }
 
                 cand_prompt = f"""
-                당신은 인스타그램 트렌드 뉴스 채널(@trendy.life_newwws)의 수석 카피라이터입니다.
-                기사 내용을 토대로 독자의 시선을 사로잡는 강력한 후킹 제목 3가지를 만드세요.
-                - 특수문자나 이모지는 절대 사용하지 말고, 따옴표/물음표만 사용하세요.
+                당신은 인스타그램 트렌드 매거진(@trendy.life_newwws)의 수석 카피라이터이자 UX 에디터입니다.
+                독자의 시선을 사로잡는 강력한 후킹 제목 3가지를 만드세요.
+                - 기자 이름, 날짜(오늘, 몇일), 언론사명, 괄호 따위의 노이즈는 절대 넣지 마세요.
+                - 따옴표와 핵심 키워드만 사용하여 완성하세요.
 
                 기사 원문 제목: {combined_title}
                 기사 본문 요약: {combined_text[:1400]}
                 """
                 res = call_gemini_headlines(cand_prompt, combined_title)
-                st.session_state.headline_candidates = res.get("titles", [combined_title])
+                st.session_state.headline_candidates = [sanitize_korean_text(t) for t in res.get("titles", [combined_title])]
                 st.session_state.full_script = None
                 st.session_state.rendered_images = []
                 st.session_state.zip_data = None
@@ -493,13 +581,22 @@ if st.session_state.headline_candidates:
 
     if st.button("🚀 선택한 헤드라인으로 카드뉴스 완성하기", type="primary", use_container_width=True):
         art = st.session_state.article_data
-        with st.spinner("이미지 풀 구성 및 슬라이드 합성을 진행 중입니다..."):
+        with st.spinner("스마트 프레이밍 및 클린 타이포그래피를 적용 중입니다..."):
             script_prompt = f"""
-            당신은 인스타그램 트렌드 매거진(@trendy.life_newwws) 전문 에디터입니다.
+            당신은 인스타그램 트렌드 매거진(@trendy.life_newwws)의 전문 에디터입니다.
             표지 제목은 반드시 "{selected_headline}"을 사용하세요.
             반드시 5장의 슬라이드(page 1부터 5까지)를 구성하세요.
-            각 슬라이드의 내용과 가장 잘 어울리는 검색 키워드를 'img_keyword'에 영어 1~2단어로 작성하세요.
-            슬라이드 본문(subhead)은 2~3줄 내외(120자 이내)로 작성하고 이모지는 포함하지 마세요.
+            
+            [절대 작성 수칙 - 엄격 준수]:
+            1. 문장은 중간에 잘리지 않도록 반드시 마침표(.)로 끝나는 '완결된 문장' 1~2개로 구성하세요.
+            2. '스튜디오S', '극본 편성근', '아이즈 최재욱 기자', '28일 공개' 같은 제작사 정보, 날짜, 기사 정보는 절대 넣지 마세요.
+            3. 각 슬라이드의 역할:
+               - 1번: 작품/이슈의 핵심 사건 개요
+               - 2번: 스토리의 흥미진진한 갈등 배경
+               - 3번: 주인공/핵심 인물의 파격적이고 사이다 같은 매력 포인트
+               - 4번: 주요 라인업 배우들의 활약과 연기 대립 구도
+               - 5번: '댓글 질문'을 본문에 쓰지 말고, 작품/사건에 대한 최종 관전 포인트나 기대감을 멋지게 서술하세요. (하단에 이미 댓글 질문이 있습니다)
+            4. 각 슬라이드의 어울리는 검색 키워드를 'img_keyword'에 영어 1~2단어로 작성하세요.
 
             기사 내용: {art['text']}
             """
@@ -520,7 +617,7 @@ if st.session_state.headline_candidates:
                 user_first_img = None
                 article_cover_img = download_image_pil(art.get("top_image_url"))
 
-                # 1) 사용자가 직접 업로드한 이미지 로드
+                # 1) 사용자가 직접 업로드한 이미지 우선 로드
                 if uploaded_custom_files:
                     for up_file in uploaded_custom_files:
                         try:
@@ -554,7 +651,6 @@ if st.session_state.headline_candidates:
                 elif len(unique_images_pool) > 0:
                     cover_candidate = unique_images_pool[0]
 
-                # 표지로 선정된 이미지는 2~5번 슬라이드에서 중복 사용되지 않도록 풀에서 배제
                 used_pool = []
                 cover_hash = calculate_dhash(cover_candidate) if cover_candidate else None
                 for img in unique_images_pool:
@@ -574,7 +670,7 @@ if st.session_state.headline_candidates:
 
                     base_img = None
 
-                    # 1번 슬라이드: 선택된 표지 이미지 적용
+                    # 1번 슬라이드
                     if page == 1:
                         if cover_candidate:
                             base_img = cover_candidate
@@ -583,7 +679,7 @@ if st.session_state.headline_candidates:
                         else:
                             base_img = fetch_keyword_stock_image(keyword, fallback_img=fallback_cover)
                     else:
-                        # 2~5번 슬라이드: 드라마 모드면 남은 고유 풀 순차 소진, 일반 모드면 맞춤 스톡 이미지
+                        # 2~5번 슬라이드
                         if "드라마/영화" in image_mode:
                             if len(used_pool) > 0:
                                 base_img = used_pool.pop(0)
@@ -620,7 +716,7 @@ if st.session_state.headline_candidates:
 # 3단계: 화면 표시
 # ---------------------------------------------
 if st.session_state.rendered_images and st.session_state.zip_data:
-    st.success("🎉 첨부 사진 및 기사 원문 사진을 결합한 피드가 성공적으로 완성되었습니다!")
+    st.success("🎉 문장 완결성을 완벽하게 보장한 고품질 매거진 피드가 완성되었습니다!")
 
     st.download_button(
         label="📦 트렌디라이프 피드 한 번에 다운로드 (ZIP)",
