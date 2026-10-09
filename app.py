@@ -69,15 +69,52 @@ if "zip_filename" not in st.session_state:
     st.session_state.zip_filename = ""
 
 def load_fonts(t_sz, c_sz):
-    try:
-        return (
-            ImageFont.truetype("malgunbd.ttf", t_sz),
-            ImageFont.truetype("malgun.ttf", c_sz),
-            ImageFont.truetype("malgunbd.ttf", 22),
-            ImageFont.truetype("arialbd.ttf", 26)
-        )
-    except:
-        return (ImageFont.load_default(), ImageFont.load_default(), ImageFont.load_default(), ImageFont.load_default())
+    # 리눅스(Streamlit Cloud) 및 윈도우 환경 모두 지원하는 한글 폰트 탐색 경로
+    font_candidates_bold = [
+        "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+        "malgunbd.ttf",
+        "NanumGothicBold.ttf"
+    ]
+    font_candidates_regular = [
+        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "malgun.ttf",
+        "NanumGothic.ttf"
+    ]
+
+    title_font = None
+    content_font = None
+    badge_font = None
+    page_font = None
+
+    for f_path in font_candidates_bold:
+        try:
+            title_font = ImageFont.truetype(f_path, t_sz)
+            badge_font = ImageFont.truetype(f_path, 22)
+            page_font = ImageFont.truetype(f_path, 26)
+            break
+        except:
+            continue
+
+    for f_path in font_candidates_regular:
+        try:
+            content_font = ImageFont.truetype(f_path, c_sz)
+            break
+        except:
+            continue
+
+    # 폰트를 못 찾았을 경우 대체
+    if not title_font:
+        title_font = ImageFont.load_default()
+    if not content_font:
+        content_font = ImageFont.load_default()
+    if not badge_font:
+        badge_font = ImageFont.load_default()
+    if not page_font:
+        page_font = ImageFont.load_default()
+
+    return (title_font, content_font, badge_font, page_font)
 
 # 이미지 다운로더 (URL -> PIL Image)
 def download_image_from_url(img_url):
