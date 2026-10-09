@@ -11,11 +11,11 @@ from newspaper import Article
 from google import genai
 from google.genai import types
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import List
 
 # =============================================
-# 1. API 키 설정 (Streamlit Cloud Secrets 및 로컬 환경변수 지원)
+# 1. API 키 설정 (Streamlit Cloud Secrets / 로컬 환경변수 지원)
 # =============================================
 api_key = os.environ.get("GEMINI_API_KEY")
 if not api_key and "GEMINI_API_KEY" in st.secrets:
@@ -23,21 +23,32 @@ if not api_key and "GEMINI_API_KEY" in st.secrets:
 
 client = genai.Client(api_key=api_key)
 
-st.set_page_config(page_title="트렌디 라이프 카드 뉴스 ", layout="wide")
+st.set_page_config(page_title="트렌디라이프 뉴스 - 스마트 카드뉴스 생성기", layout="wide")
 
-# 사이드바
-st.sidebar.header("🎨 트렌디라이프 스타일 옵션")
+# 사이드바 설정
+st.sidebar.header("🎨 트렌디라이프 옵션")
+
+# [핵심] 이미지 처리 모드 선택
+image_mode = st.sidebar.radio(
+    "📸 이미지 생성 모드 선택",
+    [
+        "🎨 일반 맞춤형 모드 (기사 대표사진 1장 + 슬라이드별 맞춤 실사)",
+        "🎬 드라마/영화/콘텐츠 모드 (기사 본문 스틸컷·포스터 적극 활용)"
+    ],
+    index=0
+)
+
 title_size = st.sidebar.slider("제목 글자 크기", min_value=46, max_value=64, value=54, step=2)
 content_size = st.sidebar.slider("본문 글자 크기", min_value=24, max_value=34, value=28, step=2)
-brand_tag = st.sidebar.text_input("상단 브랜딩 태그", value="What's today?")
-caption_length = st.sidebar.radio("인스타 캡션 길이", ["짧게 (3~4줄 핵심 요약)", "보통 (인사이트 중심)", "길게 (상세 스토리텔링)"], index=1)
+brand_tag = st.sidebar.text_input("상단 브랜딩 태그", value="TREND ISSUE")
+caption_length = st.sidebar.radio("인스타 캡션 길이", ["짧게 (3~4줄 요약)", "보통 (인사이트 중심)", "길게 (상세 스토리텔링)"], index=1)
 
 # 헤더
 st.markdown("""
 <div style="text-align: center; line-height: 1.35; margin-bottom: 25px;">
-    <h2 style="color: #0F172A; margin-bottom: 8px; font-weight: 800;">🔥 트렌디 라이프 카드 뉴스 생성기</h2>
-    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">뉴스 기사만 넣으면<br> 
-    <p style="color: #3B82F6; font-size: 19px; font-weight: 600; margin: 0;">이미지ㆍ제목ㆍ본문을<br>
+    <h2 style="color: #0F172A; margin-bottom: 8px; font-weight: 800;">🔥 트렌디라이프 카드 뉴스 생성기</h2>
+    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">뉴스 기사만 넣으면<br>
+    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">이미지ㆍ제목ㆍ본문을<br>
     <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">한 번에 만들어드려요.</p>
 </div>
 """, unsafe_allow_html=True)
@@ -70,24 +81,25 @@ def load_fonts(t_sz, c_sz):
     except:
         return (ImageFont.load_default(), ImageFont.load_default(), ImageFont.load_default(), ImageFont.load_default())
 
-# 기사 원문 대표 이미지 다운로더
-def fetch_top_image(img_url):
+# 이미지 다운로더 (URL -> PIL Image)
+def download_image_from_url(img_url):
+    if not img_url:
+        return None
     headers = {"User-Agent": "Mozilla/5.0"}
-    if img_url:
-        try:
-            res = requests.get(img_url, headers=headers, timeout=5)
-            if res.status_code == 200:
-                return Image.open(BytesIO(res.content))
-        except:
-            pass
+    try:
+        res = requests.get(img_url, headers=headers, timeout=5)
+        if res.status_code == 200 and len(res.content) > 3000:
+            return Image.open(BytesIO(res.content))
+    except:
+        pass
     return None
 
-# 문맥 키워드 기반 고화질 실사 이미지 매칭 엔진
-def fetch_context_image(keyword, fallback_img=None):
+# 키워드 기반 고화질 스톡 이미지 다운로더
+def fetch_keyword_stock_image(keyword, fallback_img=None):
     headers = {"User-Agent": "Mozilla/5.0"}
-    clean_keyword = urllib.parse.quote(keyword.strip()) if keyword else "trend"
+    clean_keyword = urllib.parse.quote(keyword.strip()) if keyword else "editorial"
     
-    # 1. Unsplash Source 고해상도 검색
+    # Unsplash 고화질 검색
     search_url = f"https://source.unsplash.com/1080x1350/?{clean_keyword}"
     try:
         res = requests.get(search_url, headers=headers, timeout=5, allow_redirects=True)
@@ -95,18 +107,17 @@ def fetch_context_image(keyword, fallback_img=None):
             return Image.open(BytesIO(res.content))
     except:
         pass
-    
-    # 2. Picsum 시드 백업
+
+    # Picsum 백업
     try:
         seed_hash = abs(hash(keyword)) % 1000
-        backup_url = f"https://picsum.photos/seed/{seed_hash}/1080/1350"
-        res = requests.get(backup_url, headers=headers, timeout=5)
+        res = requests.get(f"https://picsum.photos/seed/{seed_hash}/1080/1350", headers=headers, timeout=5)
         if res.status_code == 200:
             return Image.open(BytesIO(res.content))
     except:
         pass
 
-    # 3. 최후 수단: 1번 원문 이미지 블러 배경
+    # 원문 이미지 블러 처리 백업
     if fallback_img:
         try:
             return fallback_img.copy().filter(ImageFilter.GaussianBlur(15))
@@ -116,7 +127,7 @@ def fetch_context_image(keyword, fallback_img=None):
     return Image.new("RGB", (1080, 1350), color=(25, 33, 44))
 
 # =============================================
-# Pydantic 스키마 정의 (JSON 문법 오류 원천 방지)
+# Pydantic 스키마 정의
 # =============================================
 class SlideItem(BaseModel):
     page: int
@@ -131,9 +142,8 @@ class CardNewsResponse(BaseModel):
 class HeadlineCandidates(BaseModel):
     titles: List[str]
 
-# 1단계 제목 생성 전용 호출 함수
 def call_gemini_headlines(prompt):
-    candidate_models = ["gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-3.5-flash"]
+    candidate_models = ["gemini-2.5-flash", "gemini-2.5-pro"]
     last_err = None
     for model_name in candidate_models:
         for attempt in range(1, 3):
@@ -159,9 +169,8 @@ def call_gemini_headlines(prompt):
                     break
     raise Exception(f"헤드라인 생성 실패: {last_err}")
 
-# 2단계 카드뉴스 전체 스크립트 전용 호출 함수
 def call_gemini_script(prompt):
-    candidate_models = ["gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-3.5-flash"]
+    candidate_models = ["gemini-2.5-flash", "gemini-2.5-pro"]
     last_err = None
     for model_name in candidate_models:
         for attempt in range(1, 3):
@@ -187,7 +196,7 @@ def call_gemini_script(prompt):
                     break
     raise Exception(f"스크립트 생성 실패: {last_err}")
 
-# 트렌디라이프 렌더링 엔진
+# 카드 렌더링 엔진 (4:5 풀스크린 + 가독성 다크 그라데이션)
 def render_trendportal_card(page, title, content, base_img, fonts, tag_text="TREND ISSUE"):
     title_font, content_font, tag_font, page_font = fonts
     width, height = 1080, 1350
@@ -296,26 +305,31 @@ def render_trendportal_card(page, title, content, base_img, fonts, tag_text="TRE
     elif page == 5:
         draw.text((64, footer_y), "Q. 여러분의 생각을 댓글로 남겨주세요!", font=tag_font, fill=(52, 211, 153))
     else:
-        draw.text((64, footer_y), "@TRENDY.LIFE_NEWWWS", font=tag_font, fill=(148, 163, 184))
+        draw.text((64, footer_y), "@TRENDY.LIFE_NEWWWS · DAILY ISSUE", font=tag_font, fill=(148, 163, 184))
 
     return card
 
 # ---------------------------------------------
 # 1단계: 기사 분석
 # ---------------------------------------------
-if st.button("🔍 1단계: 기사 분석 및 트렌드 헤드라인 3개 추천받기", type="primary", use_container_width=True):
+if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="primary", use_container_width=True):
     if not news_url.strip():
         st.warning("뉴스 기사 링크를 입력해 주세요.")
     else:
-        with st.spinner("기사 본문을 추출하고 후킹 헤드라인을 생성하는 중입니다..."):
+        with st.spinner("기사 본문과 포함된 사진들을 분석하고 있습니다..."):
             try:
                 article = Article(news_url, language='ko')
                 article.download()
                 article.parse()
+
+                # 기사 내 유효한 모든 이미지 URL 추출 (드라마/영화 스틸컷용)
+                valid_images = [img for img in article.images if img.startswith("http") and not img.endswith(".svg")]
+
                 st.session_state.article_data = {
                     "title": article.title,
                     "text": article.text,
-                    "top_image": article.top_image
+                    "top_image": article.top_image,
+                    "all_images": valid_images
                 }
 
                 cand_prompt = f"""
@@ -335,7 +349,7 @@ if st.button("🔍 1단계: 기사 분석 및 트렌드 헤드라인 3개 추천
                 st.error(f"기사 분석 실패: {e}")
 
 # ---------------------------------------------
-# 2단계: 제목 선택 및 맞춤 이미지 피드 생성
+# 2단계: 제목 선택 및 맞춤 카드뉴스 생성
 # ---------------------------------------------
 if st.session_state.headline_candidates:
     st.subheader("💡 마음에 드는 표지 헤드라인을 선택하세요")
@@ -345,14 +359,13 @@ if st.session_state.headline_candidates:
         index=0
     )
 
-    if st.button("🚀 선택한 헤드라인으로 내용 맞춤 피드 완성하기", type="primary", use_container_width=True):
+    if st.button("🚀 선택한 헤드라인으로 카드뉴스 완성하기", type="primary", use_container_width=True):
         art = st.session_state.article_data
-        with st.spinner("슬라이드별 내용 맞춤 키워드 및 본문 캡션을 추출 중입니다..."):
+        with st.spinner("슬라이드 대본 작성 및 이미지를 합성 중입니다..."):
             script_prompt = f"""
             당신은 인스타그램 트렌드 매거진(@trendy.life_newwws) 전문 에디터입니다.
             표지 제목은 반드시 "{selected_headline}"을 사용하세요.
-            각 슬라이드(1~5번)의 내용(subhead)과 어울리는 고화질 실사 사진을 스톡 포토에서 가져올 수 있도록,
-            'img_keyword' 필드에 핵심 영문 검색어 1~2단어(예: 'pampas grass', 'train travel', 'hiking', 'korean food', 'crowd')를 정확히 작성하세요.
+            각 슬라이드의 내용과 가장 잘 어울리는 검색 키워드를 'img_keyword'에 영어 1~2단어로 작성하세요.
             슬라이드 본문(subhead)은 2~3줄 내외(120자 이내)로 작성하고 이모지는 포함하지 마세요.
 
             기사 원문 제목: {art['title']}
@@ -367,20 +380,39 @@ if st.session_state.headline_candidates:
                 os.makedirs(folder_name, exist_ok=True)
 
                 saved_images = []
-                top_img_original = fetch_top_image(art.get("top_image"))
+                top_img_original = download_image_from_url(art.get("top_image"))
 
-                for slide in data["slides"]:
+                # 드라마/영화 모드일 때 사용할 기사 내 스틸컷 이미지들 미리 다운로드
+                article_images_pool = []
+                if "드라마/영화" in image_mode:
+                    for img_url in art.get("all_images", []):
+                        img_obj = download_image_from_url(img_url)
+                        if img_obj and (img_obj.width >= 400 or img_obj.height >= 400):
+                            article_images_pool.append(img_obj)
+
+                for idx, slide in enumerate(data["slides"]):
                     page = slide["page"]
                     title = slide["headline"]
                     content = slide["subhead"]
                     keyword = slide.get("img_keyword", "trend")
 
-                    # 1번 슬라이드는 기사 원문 사진 우선, 2~5번은 슬라이드 내용 맞춤 사진
                     base_img = None
-                    if page == 1 and top_img_original:
-                        base_img = top_img_original
+
+                    # --- 분기 로직: 선택된 이미지 모드에 따른 처리 ---
+                    if "드라마/영화" in image_mode:
+                        # 기사 본문에 수집된 스틸컷/포스터 사진들을 순서대로 사용
+                        if idx < len(article_images_pool):
+                            base_img = article_images_pool[idx]
+                        elif top_img_original:
+                            base_img = top_img_original
+                        else:
+                            base_img = fetch_keyword_stock_image(keyword, fallback_img=top_img_original)
                     else:
-                        base_img = fetch_context_image(keyword, fallback_img=top_img_original)
+                        # 일반 맞춤형 모드: 1번은 대표사진, 2~5번은 슬라이드 내용 맞춤 고화질 스톡
+                        if page == 1 and top_img_original:
+                            base_img = top_img_original
+                        else:
+                            base_img = fetch_keyword_stock_image(keyword, fallback_img=top_img_original)
 
                     card = render_trendportal_card(page, title, content, base_img, fonts, tag_text=brand_tag)
                     
@@ -388,6 +420,7 @@ if st.session_state.headline_candidates:
                     card.save(save_path)
                     saved_images.append(card)
 
+                # ZIP 패키징
                 zip_buffer = BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                     for idx, img in enumerate(saved_images):
@@ -409,7 +442,7 @@ if st.session_state.headline_candidates:
 # 3단계: 화면 표시
 # ---------------------------------------------
 if st.session_state.rendered_images and st.session_state.zip_data:
-    st.success("🎉 각 슬라이드 내용과 매칭된 실사 이미지가 정상 합성되었습니다!")
+    st.success("🎉 선택하신 이미지 모드에 맞춰 고화질 피드 5장이 완성되었습니다!")
 
     st.download_button(
         label="📦 트렌디라이프 피드 5장 + 캡션 한 번에 다운로드 (ZIP)",
@@ -420,7 +453,7 @@ if st.session_state.rendered_images and st.session_state.zip_data:
     )
 
     st.write("---")
-    st.subheader("🖼️ 생성된 피드 미리보기 (슬라이드별 맞춤 이미지)")
+    st.subheader("🖼️ 생성된 피드 미리보기")
     grid_cols = st.columns(5)
     for idx, img in enumerate(st.session_state.rendered_images):
         with grid_cols[idx]:
