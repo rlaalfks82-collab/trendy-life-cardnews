@@ -28,7 +28,7 @@ st.set_page_config(page_title="트렌디라이프 뉴스 - 스마트 카드뉴�
 # 사이드바 설정
 st.sidebar.header("🎨 트렌디라이프 옵션")
 
-# [핵심] 이미지 처리 모드 선택
+# 이미지 모드 선택 분기
 image_mode = st.sidebar.radio(
     "📸 이미지 생성 모드 선택",
     [
@@ -46,10 +46,8 @@ caption_length = st.sidebar.radio("인스타 캡션 길이", ["짧게 (3~4줄 �
 # 헤더
 st.markdown("""
 <div style="text-align: center; line-height: 1.35; margin-bottom: 25px;">
-    <h2 style="color: #0F172A; margin-bottom: 8px; font-weight: 800;">🔥 트렌디라이프 카드 뉴스 생성기</h2>
-    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">뉴스 기사만 넣으면<br>
-    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">이미지ㆍ제목ㆍ본문을<br>
-    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">한 번에 만들어드려요.</p>
+    <h2 style="color: #0F172A; margin-bottom: 8px; font-weight: 800;">🔥 트렌디라이프 스마트 카드뉴스 생성기</h2>
+    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">기사 성격에 맞춰 원문 스틸컷 활용 또는 고화질 맞춤 이미지를 자동 합성합니다</p>
 </div>
 """, unsafe_allow_html=True)
 st.write("---")
@@ -99,7 +97,7 @@ def fetch_keyword_stock_image(keyword, fallback_img=None):
     headers = {"User-Agent": "Mozilla/5.0"}
     clean_keyword = urllib.parse.quote(keyword.strip()) if keyword else "editorial"
     
-    # Unsplash 고화질 검색
+    # 1. Unsplash 고화질 검색
     search_url = f"https://source.unsplash.com/1080x1350/?{clean_keyword}"
     try:
         res = requests.get(search_url, headers=headers, timeout=5, allow_redirects=True)
@@ -108,7 +106,7 @@ def fetch_keyword_stock_image(keyword, fallback_img=None):
     except:
         pass
 
-    # Picsum 백업
+    # 2. Picsum 백업
     try:
         seed_hash = abs(hash(keyword)) % 1000
         res = requests.get(f"https://picsum.photos/seed/{seed_hash}/1080/1350", headers=headers, timeout=5)
@@ -117,7 +115,7 @@ def fetch_keyword_stock_image(keyword, fallback_img=None):
     except:
         pass
 
-    # 원문 이미지 블러 처리 백업
+    # 3. 원문 이미지 블러 처리 백업
     if fallback_img:
         try:
             return fallback_img.copy().filter(ImageFilter.GaussianBlur(15))
@@ -142,8 +140,9 @@ class CardNewsResponse(BaseModel):
 class HeadlineCandidates(BaseModel):
     titles: List[str]
 
+# 1단계 제목 생성 전용 호출 함수 (최신 모델 Fallback)
 def call_gemini_headlines(prompt):
-    candidate_models = ["gemini-2.5-flash", "gemini-2.5-pro"]
+    candidate_models = ["gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-3.5-flash"]
     last_err = None
     for model_name in candidate_models:
         for attempt in range(1, 3):
@@ -169,8 +168,9 @@ def call_gemini_headlines(prompt):
                     break
     raise Exception(f"헤드라인 생성 실패: {last_err}")
 
+# 2단계 카드뉴스 전체 스크립트 전용 호출 함수 (최신 모델 Fallback)
 def call_gemini_script(prompt):
-    candidate_models = ["gemini-2.5-flash", "gemini-2.5-pro"]
+    candidate_models = ["gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-3.5-flash"]
     last_err = None
     for model_name in candidate_models:
         for attempt in range(1, 3):
@@ -398,9 +398,9 @@ if st.session_state.headline_candidates:
 
                     base_img = None
 
-                    # --- 분기 로직: 선택된 이미지 모드에 따른 처리 ---
+                    # 모드별 이미지 배치 분기
                     if "드라마/영화" in image_mode:
-                        # 기사 본문에 수집된 스틸컷/포스터 사진들을 순서대로 사용
+                        # 기사 본문에 수집된 스틸컷/포스터 사진들을 순서대로 우선 사용
                         if idx < len(article_images_pool):
                             base_img = article_images_pool[idx]
                         elif top_img_original:
