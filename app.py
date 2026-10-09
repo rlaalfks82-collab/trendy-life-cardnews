@@ -39,7 +39,7 @@ image_mode = st.sidebar.radio(
 
 title_size = st.sidebar.slider("제목 글자 크기", min_value=46, max_value=64, value=54, step=2)
 content_size = st.sidebar.slider("본문 글자 크기", min_value=24, max_value=34, value=28, step=2)
-brand_tag = st.sidebar.text_input("상단 브랜딩 태그", value="TREND ISSUE")
+brand_tag = st.sidebar.text_input("상단 브랜딩 태그", value="What's today?")
 caption_length = st.sidebar.radio("인스타 캡션 길이", ["짧게 (3~4줄 요약)", "보통 (인사이트 중심)", "길게 (상세 스토리텔링)"], index=1)
 
 # 헤더
@@ -253,7 +253,7 @@ def call_gemini_script(prompt):
                     break
     raise Exception(f"스크립트 생성 실패: {last_err}")
 
-def render_trendportal_card(page, total_pages, title, content, base_img, fonts, tag_text="What's today?"):
+def render_trendportal_card(page, total_pages, title, content, base_img, fonts, tag_text="TREND ISSUE"):
     title_font, content_font, tag_font, page_font = fonts
     width, height = 1080, 1350
 
