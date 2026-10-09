@@ -8,10 +8,11 @@ from datetime import datetime
 from io import BytesIO
 import requests
 import streamlit as st
+import numpy as np
 from newspaper import Article
 from google import genai
 from google.genai import types
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageStat
 from pydantic import BaseModel
 from typing import List
 
@@ -60,14 +61,14 @@ cover_source_choice = st.sidebar.radio(
 )
 
 title_size = st.sidebar.slider("제목 글자 크기", min_value=46, max_value=64, value=52, step=2)
-content_size = st.sidebar.slider("본문 글자 크기", min_value=24, max_value=34, value=27, step=2)
+content_size = st.sidebar.slider("본문 글자 크기", min_value=24, max_value=34, value=26, step=2)
 brand_tag = st.sidebar.text_input("상단 브랜딩 태그", value="TREND ISSUE")
 
 # 메인 헤더
 st.markdown("""
 <div style="text-align: center; line-height: 1.35; margin-bottom: 25px;">
     <h2 style="color: #0F172A; margin-bottom: 8px; font-weight: 800;">🔥 트렌디라이프 매거진 카드뉴스 생성기</h2>
-    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">문장 끊김 없는 완결형 스토리텔링 & 스마트 비주얼 프레이밍 적용</p>
+    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">피사체 절단 방지 프레이밍 & 로고·단색 그래픽 자동 필터링 적용</p>
 </div>
 """, unsafe_allow_html=True)
 st.write("---")
@@ -148,7 +149,6 @@ def load_fonts(t_sz, c_sz):
 def sanitize_korean_text(text):
     if not text:
         return ""
-    # 1. 바이라인/출처/헤더 제거
     text = re.sub(r"\[.*?기자.*?\]", "", text)
     text = re.sub(r"\(.*?=.*?기자\)", "", text)
     text = re.sub(r"\(.*?=.*?\)", "", text)
@@ -156,40 +156,95 @@ def sanitize_korean_text(text):
     text = re.sub(r".*?기자\s*=", "", text)
     text = re.sub(r"\w+기자\b", "", text)
     text = re.sub(r"\(사진=.*?\)", "", text)
-    
-    # 2. 날짜 파편 및 불필요한 호칭 정리
     text = re.sub(r"\b(오늘|어제|지난)\s*\(\d+일\)", "", text)
     text = re.sub(r"''\(이하\s*['\"].*?['\"]\)", "", text)
     text = re.sub(r"\(이하\s*['\"].*?['\"]\)", "", text)
-    
-    # 3. 따옴표 및 연속 공백 정리
     text = text.replace("''", "'").replace('""', '"')
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
 # ---------------------------------------------
-# 스마트 포토 프레이밍 (Smart Framing & Aspect Fit)
+# [UX 강화] 피사체 얼굴 절단 방지 프레이밍 엔진
 # ---------------------------------------------
-def smart_crop_to_ratio(base_img, target_w=1080, target_h=1350):
+def smart_fit_or_crop(base_img, target_w=1080, target_h=1350):
+    """
+    얼굴을 절대 자르지 않는 프레이밍 엔진:
+    - 세로 비율이 맞으면 상단 여백을 살려 깔끔하게 크롭
+    - 가로가 너무 긴 사진(투샷, 단체컷)은 억지로 자르지 않고
+      원본 비율을 100% 보존한 뒤 배경을 은은한 블러로 채움 (Letterbox Blur)
+    """
     base_img = base_img.convert("RGBA")
     src_w, src_h = base_img.size
     target_ratio = target_w / target_h
     src_ratio = src_w / src_h
 
+    # 가로가 지나치게 긴 경우 (비율 1.15 이상: 두 명 이상 인물 사진 등)
+    if src_ratio > 1.15:
+        # 1. 배경 블러 캔버스 생성
+        bg_scale = max(target_w / src_w, target_h / src_h)
+        bg_w, bg_h = int(src_w * bg_scale), int(src_h * bg_scale)
+        bg = base_img.resize((bg_w, bg_h), Image.Resampling.LANCZOS)
+        
+        # 중앙 크롭
+        left = (bg_w - target_w) // 2
+        top = (bg_h - target_h) // 2
+        bg = bg.crop((left, top, left + target_w, top + target_h))
+        bg = bg.filter(ImageFilter.GaussianBlur(35))
+        
+        # 은은한 딤 처리
+        dark_overlay = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 90))
+        bg = Image.alpha_composite(bg, dark_overlay)
+
+        # 2. 전면 원본 사진 (비율 100% 유지하여 중앙 상단에 배치)
+        fit_scale = min(target_w / src_w, (target_h * 0.65) / src_h)
+        fg_w, fg_h = int(src_w * fit_scale), int(src_h * fit_scale)
+        fg = base_img.resize((fg_w, fg_h), Image.Resampling.LANCZOS)
+
+        pos_x = (target_w - fg_w) // 2
+        pos_y = 120 # 상단 적정 높이에 배치하여 얼굴 및 상반신 전체 노출
+        bg.paste(fg, (pos_x, pos_y), fg)
+        return bg
+
+    # 세로형 또는 정방형에 가까운 사진: 상단 여백을 보존하며 크롭
     if src_ratio > target_ratio:
         new_w = int(src_h * target_ratio)
-        left_offset = int((src_w - new_w) * 0.40)
-        base_img = base_img.crop((left_offset, 0, left_offset + new_w, src_h))
+        left_offset = int((src_w - new_w) * 0.45)
+        cropped = base_img.crop((left_offset, 0, left_offset + new_w, src_h))
     else:
         new_h = int(src_w / target_ratio)
-        top_offset = int((src_h - new_h) * 0.15)
+        # 상단 인물 머리가 잘리지 않도록 윗부분 우선 확보
+        top_offset = int((src_h - new_h) * 0.10)
         top_offset = max(0, min(top_offset, src_h - new_h))
-        base_img = base_img.crop((0, top_offset, src_w, top_offset + new_h))
+        cropped = base_img.crop((0, top_offset, src_w, top_offset + new_h))
 
-    return base_img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+    return cropped.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
 # ---------------------------------------------
-# 시각적 중복 이미지 판별 (dHash)
+# 로고 및 단색 그래픽 자동 필터링 (Entropy & Color Variance)
+# ---------------------------------------------
+def is_valid_photo(pil_img):
+    """언론사 CI 로고, 단색 아이콘, 지나치게 단순한 그래픽을 자동 차단"""
+    if pil_img.width < 350 or pil_img.height < 350:
+        return False
+    
+    # 그레이스케일 변환 후 표준편차 분석 (단색/로고는 표준편차가 매우 낮거나 극단적임)
+    gray = pil_img.convert("L")
+    stat = ImageStat.Stat(gray)
+    stddev = stat.stddev[0]
+    
+    # 표준편차가 35 미만이면 거의 단색 그래픽/단순 로고로 판정하여 제외
+    if stddev < 35:
+        return False
+
+    # 극단적인 와이드 배너 제외
+    ratio = pil_img.width / pil_img.height
+    if ratio < 0.45 or ratio > 2.6:
+        return False
+
+    return True
+
+# ---------------------------------------------
+# 지각 해시 (dHash) 기반 중복 검증
 # ---------------------------------------------
 def calculate_dhash(image):
     img_gray = image.convert("L").resize((9, 8), Image.Resampling.LANCZOS)
@@ -213,12 +268,10 @@ def download_image_pil(img_url):
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
         res = requests.get(img_url, headers=headers, timeout=6)
-        if res.status_code == 200 and len(res.content) > 5000:
+        if res.status_code == 200 and len(res.content) > 6000:
             img = Image.open(BytesIO(res.content))
-            if img.width >= 350 and img.height >= 350:
-                ratio = img.width / img.height
-                if 0.4 <= ratio <= 2.5:
-                    return img
+            if is_valid_photo(img):
+                return img
     except:
         pass
     return None
@@ -244,11 +297,11 @@ def fetch_keyword_stock_image(keyword, fallback_img=None):
 
     if fallback_img:
         try:
-            return fallback_img.copy().filter(ImageFilter.GaussianBlur(15))
+            return fallback_img.copy().filter(ImageFilter.GaussianBlur(25))
         except:
             pass
 
-    return Image.new("RGB", (1080, 1350), color=(25, 33, 44))
+    return Image.new("RGB", (1080, 1350), color=(18, 24, 34))
 
 # Pydantic 모델
 class SlideItem(BaseModel):
@@ -329,24 +382,21 @@ def call_gemini_script(prompt, article_title, article_text):
     return build_local_editorial_script(article_title, article_text)
 
 # ---------------------------------------------
-# [완전 개편] 문장 끊김 없는 매거진 에디토리얼 엔진 (Local Fallback)
+# 매거진 완결형 스토리텔링 엔진 (Local Fallback)
 # ---------------------------------------------
 def build_local_editorial_script(title, text):
-    """글자 수 자르기(slice)를 전면 폐기하고, 마침표 완결 문장으로 스토리텔링 구성"""
     clean_title = sanitize_korean_text(title)
     
-    # 텍스트를 마침표 기준으로 유효 문장 분리
     raw_sentences = [sanitize_korean_text(s) for s in re.split(r'(?<=[.?!])\s+', text)]
     valid_sentences = [
         s for s in raw_sentences 
-        if len(s) >= 20 and not any(kw in s for kw in ["스튜디오", "제작사", "연출", "극본", "기자", "배급"])
+        if len(s) >= 25 and not any(kw in s for kw in ["스튜디오", "제작사", "연출", "극본", "기자", "배급", "사진="])
     ]
 
-    # 각 슬라이드별 완결 문장 선택
-    s1 = valid_sentences[0] if len(valid_sentences) > 0 else f"{clean_title}이 뜨거운 화제를 모으며 대중의 이목을 집중시키고 있습니다."
-    s2 = valid_sentences[1] if len(valid_sentences) > 1 else "예측을 뒤흔드는 파격적인 캐릭터와 긴장감 넘치는 전개가 안방극장을 사로잡습니다."
-    s3 = valid_sentences[2] if len(valid_sentences) > 2 else "타협 없는 시원한 전개와 거침없는 대사들이 짜릿한 사이다 쾌감을 선사합니다."
-    s4 = valid_sentences[3] if len(valid_sentences) > 3 else "탄탄한 연기력을 자랑하는 주조연 배우들의 빈틈없는 호흡이 몰입도를 극대화합니다."
+    s1 = valid_sentences[0] if len(valid_sentences) > 0 else f"{clean_title}이 압도적인 비주얼과 스토리로 화제를 모으고 있습니다."
+    s2 = valid_sentences[1] if len(valid_sentences) > 1 else "예측을 뒤흔드는 파격적인 캐릭터와 긴장감 넘치는 전개가 펼쳐집니다."
+    s3 = valid_sentences[2] if len(valid_sentences) > 2 else "타협 없는 시원한 전개와 거침없는 카타르시스가 시청자의 시선을 사로잡습니다."
+    s4 = valid_sentences[3] if len(valid_sentences) > 3 else "탄탄한 연기력을 자랑하는 배우들의 숨 막히는 호흡이 몰입도를 극대화합니다."
 
     return {
         "slides": [
@@ -354,41 +404,41 @@ def build_local_editorial_script(title, text):
                 "page": 1,
                 "headline": clean_title,
                 "subhead": s1,
-                "img_keyword": "drama poster"
+                "img_keyword": "drama main actor"
             },
             {
                 "page": 2,
                 "headline": "도대체 무슨 일일까?",
                 "subhead": s2,
-                "img_keyword": "drama doctor"
+                "img_keyword": "drama suspense"
             },
             {
                 "page": 3,
                 "headline": "거침없는 사이다 매력",
                 "subhead": s3,
-                "img_keyword": "charismatic actor"
+                "img_keyword": "charismatic scene"
             },
             {
                 "page": 4,
                 "headline": "믿고 보는 배우 라인업",
                 "subhead": s4,
-                "img_keyword": "intense face"
+                "img_keyword": "intense drama"
             },
             {
                 "page": 5,
                 "headline": "오늘 밤 첫 방송 시작",
-                "subhead": "안방극장에 통쾌한 카타르시스를 전할 본방송을 오늘 밤 직접 확인해 보세요.",
-                "img_keyword": "broadcast"
+                "subhead": "안방극장에 통쾌한 전율을 선사할 화제의 신작을 오늘 밤 본방송으로 직접 확인해 보세요.",
+                "img_keyword": "broadcasting"
             }
         ],
         "caption": f"🔥 {clean_title}\n\n화제의 신작 소식! 과연 어떤 통쾌한 활약을 보여줄까요?\n\n#드라마 #트렌드 #이슈 #트렌디라이프"
     }
 
 # ---------------------------------------------
-# UX 최적화 렌더링 엔진 (Visual Hierarchy & Typography)
+# UX 가독성 단락 조판 (Measure Formatting)
 # ---------------------------------------------
 def format_lines_by_measure(text, max_chars_per_line):
-    """어절(단어) 단위 자연스러운 줄바꿈 보장"""
+    """의미 단위 끊김을 방지하고 문맥 호흡을 살리는 조판"""
     words = text.strip().split()
     lines, curr = [], ""
     for w in words:
@@ -406,29 +456,29 @@ def render_trendportal_card(page, total_pages, title, content, base_img, fonts, 
     title_font, content_font, tag_font, page_font = fonts
     width, height = 1080, 1350
 
-    # 1. 스마트 프레이밍 크롭 (인물/제목 보존)
-    base_img = smart_crop_to_ratio(base_img, width, height)
+    # 1. 피사체 보호 프레이밍 (얼굴 절단 원천 차단)
+    base_img = smart_fit_or_crop(base_img, width, height)
 
-    # 2. 미니멀 다크 그라데이션 (피사체 얼굴을 가리지 않도록 650px 이하부터 집중 어둡게)
+    # 2. 다크 그라데이션
     gradient = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     g_draw = ImageDraw.Draw(gradient)
 
     for y in range(0, 180):
-        alpha = int((1.0 - (y / 180.0)) * 95)
+        alpha = int((1.0 - (y / 180.0)) * 85)
         g_draw.line([(0, y), (width, y)], fill=(5, 8, 15, alpha))
 
-    for y in range(650, height):
+    for y in range(680, height):
         if y < 980:
-            progress = (y - 650) / (980 - 650)
-            alpha = int((progress ** 1.8) * 230)
+            progress = (y - 680) / (980 - 680)
+            alpha = int((progress ** 1.8) * 235)
         else:
-            alpha = 248
+            alpha = 250
         g_draw.line([(0, y), (width, y)], fill=(9, 13, 20, alpha))
 
     card = Image.alpha_composite(base_img, gradient).convert("RGB")
     draw = ImageDraw.Draw(card)
 
-    # 3. 상단 브랜드 뱃지 렌더링
+    # 3. 상단 브랜드 뱃지
     tag_clean = tag_text.strip()
     tag_bbox = draw.textbbox((0, 0), tag_clean, font=tag_font)
     t_text_w = tag_bbox[2] - tag_bbox[0]
@@ -447,12 +497,12 @@ def render_trendportal_card(page, total_pages, title, content, base_img, fonts, 
     draw.text((bx1 + 34, by1 + ((badge_h - t_text_h) // 2) - 2), tag_clean, font=tag_font, fill=(255, 255, 255))
     draw.text((930, 70), f"{page} / {total_pages}", font=page_font, fill=(203, 213, 225))
 
-    # 4. 정제된 텍스트 및 레이아웃 정렬
+    # 4. 정제된 텍스트 조판
     clean_title = sanitize_korean_text(title)
     clean_content = sanitize_korean_text(content)
 
     t_lines = format_lines_by_measure(clean_title, max_chars_per_line=13)
-    c_lines = format_lines_by_measure(clean_content, max_chars_per_line=22)
+    c_lines = format_lines_by_measure(clean_content, max_chars_per_line=21)
 
     line_y = 1230
     c_line_height = content_font.size + 14
@@ -467,13 +517,13 @@ def render_trendportal_card(page, total_pages, title, content, base_img, fonts, 
     # 포인트 옐로우 액센트 바
     draw.rounded_rectangle([64, t_start_y - 20, 114, t_start_y - 13], radius=4, fill=(250, 204, 21))
 
-    # 제목 그리기
+    # 제목
     curr_y = t_start_y
     for l in t_lines:
         draw.text((64, curr_y), l, font=title_font, fill=(255, 255, 255))
         curr_y += t_line_height
 
-    # 본문 그리기
+    # 본문
     curr_y = c_start_y
     for l in c_lines:
         draw.text((64, curr_y), l, font=content_font, fill=(226, 232, 240))
@@ -554,7 +604,7 @@ if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="
                 cand_prompt = f"""
                 당신은 인스타그램 트렌드 매거진(@trendy.life_newwws)의 수석 카피라이터이자 UX 에디터입니다.
                 독자의 시선을 사로잡는 강력한 후킹 제목 3가지를 만드세요.
-                - 기자 이름, 날짜(오늘, 몇일), 언론사명, 괄호 따위의 노이즈는 절대 넣지 마세요.
+                - 기자 이름, 날짜, 언론사명, 괄호 따위의 노이즈는 절대 넣지 마세요.
                 - 따옴표와 핵심 키워드만 사용하여 완성하세요.
 
                 기사 원문 제목: {combined_title}
@@ -581,21 +631,21 @@ if st.session_state.headline_candidates:
 
     if st.button("🚀 선택한 헤드라인으로 카드뉴스 완성하기", type="primary", use_container_width=True):
         art = st.session_state.article_data
-        with st.spinner("스마트 프레이밍 및 클린 타이포그래피를 적용 중입니다..."):
+        with st.spinner("피사체 보호 프레이밍 및 조판을 적용 중입니다..."):
             script_prompt = f"""
             당신은 인스타그램 트렌드 매거진(@trendy.life_newwws)의 전문 에디터입니다.
             표지 제목은 반드시 "{selected_headline}"을 사용하세요.
             반드시 5장의 슬라이드(page 1부터 5까지)를 구성하세요.
             
             [절대 작성 수칙 - 엄격 준수]:
-            1. 문장은 중간에 잘리지 않도록 반드시 마침표(.)로 끝나는 '완결된 문장' 1~2개로 구성하세요.
+            1. 문장은 중간에 끊기지 않도록 완결된 1개의 문장(또는 자연스러운 2개 문장, 마침표 필수)으로 70~90자 내외로 작성하세요.
             2. '스튜디오S', '극본 편성근', '아이즈 최재욱 기자', '28일 공개' 같은 제작사 정보, 날짜, 기사 정보는 절대 넣지 마세요.
             3. 각 슬라이드의 역할:
                - 1번: 작품/이슈의 핵심 사건 개요
                - 2번: 스토리의 흥미진진한 갈등 배경
                - 3번: 주인공/핵심 인물의 파격적이고 사이다 같은 매력 포인트
                - 4번: 주요 라인업 배우들의 활약과 연기 대립 구도
-               - 5번: '댓글 질문'을 본문에 쓰지 말고, 작품/사건에 대한 최종 관전 포인트나 기대감을 멋지게 서술하세요. (하단에 이미 댓글 질문이 있습니다)
+               - 5번: '댓글 질문'을 본문에 쓰지 말고, 작품/사건에 대한 최종 기대감을 매끄럽게 서술하세요.
             4. 각 슬라이드의 어울리는 검색 키워드를 'img_keyword'에 영어 1~2단어로 작성하세요.
 
             기사 내용: {art['text']}
@@ -609,7 +659,7 @@ if st.session_state.headline_candidates:
                 os.makedirs(folder_name, exist_ok=True)
 
                 # ========================================================
-                # [이미지 풀 구축] 사용자 직접 첨부 + 기사 크롤링 이미지 병합
+                # [이미지 풀 구축] 로고/단색 그래픽 필터링 및 중복 검증
                 # ========================================================
                 unique_images_pool = []
                 unique_hashes = []
@@ -617,21 +667,22 @@ if st.session_state.headline_candidates:
                 user_first_img = None
                 article_cover_img = download_image_pil(art.get("top_image_url"))
 
-                # 1) 사용자가 직접 업로드한 이미지 우선 로드
+                # 1) 사용자가 직접 업로드한 이미지 로드
                 if uploaded_custom_files:
                     for up_file in uploaded_custom_files:
                         try:
                             pil_u = Image.open(up_file)
-                            h = calculate_dhash(pil_u)
-                            if not is_duplicate_visual(h, unique_hashes, threshold=10):
-                                unique_hashes.append(h)
-                                unique_images_pool.append(pil_u)
-                                if user_first_img is None:
-                                    user_first_img = pil_u
+                            if is_valid_photo(pil_u):
+                                h = calculate_dhash(pil_u)
+                                if not is_duplicate_visual(h, unique_hashes, threshold=10):
+                                    unique_hashes.append(h)
+                                    unique_images_pool.append(pil_u)
+                                    if user_first_img is None:
+                                        user_first_img = pil_u
                         except:
                             pass
 
-                # 2) 기사 본문 크롤링 이미지 로드 및 병합
+                # 2) 기사 본문 크롤링 이미지 로드 (로고 및 단색 심볼 철저 배제)
                 for img_url in art.get("image_urls", []):
                     img_obj = download_image_pil(img_url)
                     if img_obj:
@@ -640,9 +691,7 @@ if st.session_state.headline_candidates:
                             unique_hashes.append(h)
                             unique_images_pool.append(img_obj)
 
-                # ========================================================
-                # [1번 표지 슬라이드 우선순위 결정]
-                # ========================================================
+                # 1번 슬라이드 이미지 결정
                 cover_candidate = None
                 if "내가 직접 첨부" in cover_source_choice and user_first_img:
                     cover_candidate = user_first_img
@@ -651,6 +700,7 @@ if st.session_state.headline_candidates:
                 elif len(unique_images_pool) > 0:
                     cover_candidate = unique_images_pool[0]
 
+                # 표지로 쓴 이미지는 2~5번 슬라이드에서 중복 사용 제외
                 used_pool = []
                 cover_hash = calculate_dhash(cover_candidate) if cover_candidate else None
                 for img in unique_images_pool:
@@ -684,6 +734,7 @@ if st.session_state.headline_candidates:
                             if len(used_pool) > 0:
                                 base_img = used_pool.pop(0)
                             else:
+                                # 사용할 스틸컷이 소진된 경우 고화질 실사 스톡 이미지 활용
                                 base_img = fetch_keyword_stock_image(keyword, fallback_img=fallback_cover)
                         else:
                             base_img = fetch_keyword_stock_image(keyword, fallback_img=fallback_cover)
@@ -716,7 +767,7 @@ if st.session_state.headline_candidates:
 # 3단계: 화면 표시
 # ---------------------------------------------
 if st.session_state.rendered_images and st.session_state.zip_data:
-    st.success("🎉 문장 완결성을 완벽하게 보장한 고품질 매거진 피드가 완성되었습니다!")
+    st.success("🎉 인물 절단 및 로고 유입 없이 완성도 높은 피드가 생성되었습니다!")
 
     st.download_button(
         label="📦 트렌디라이프 피드 한 번에 다운로드 (ZIP)",
