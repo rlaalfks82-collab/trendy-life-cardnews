@@ -35,8 +35,8 @@ caption_length = st.sidebar.radio("인스타 캡션 길이", ["짧게 (3~4줄 �
 # 헤더
 st.markdown("""
 <div style="text-align: center; line-height: 1.35; margin-bottom: 25px;">
-    <h2 style="color: #0F172A; margin-bottom: 8px; font-weight: 800;">🔥 트렌디라이프 카드뉴스 생성기</h2>
-    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">슬라이드별 내용과 직결된 고화질 맞춤 실사 이미지를 매칭합니다</p>
+    <h2 style="color: #0F172A; margin-bottom: 8px; font-weight: 800;">🔥 트렌디 라이프 카드뉴스 생성기</h2>
+    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">뉴스 기사만 넣으면 이미지ㆍ제목ㆍ본문을 한 번에 만들어드려요.</p>
 </div>
 """, unsafe_allow_html=True)
 st.write("---")
