@@ -68,7 +68,7 @@ brand_tag = st.sidebar.text_input("상단 브랜딩 태그", value="TREND ISSUE"
 st.markdown("""
 <div style="text-align: center; line-height: 1.35; margin-bottom: 25px;">
     <h2 style="color: #0F172A; margin-bottom: 8px; font-weight: 800;">🔥 트렌디라이프 매거진 카드뉴스 생성기</h2>
-    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">피사체 절단 방지 프레이밍 & 로고·단색 그래픽 자동 필터링 적용</p>
+    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">외부 무작위 이미지 원천 차단 & 피사체 보호 프레이밍 적용</p>
 </div>
 """, unsafe_allow_html=True)
 st.write("---")
@@ -83,7 +83,7 @@ uploaded_custom_files = st.file_uploader(
     "📁 직접 사용할 추가 고화질 이미지 첨부 (선택, 다중 선택 가능)",
     type=["png", "jpg", "jpeg", "webp"],
     accept_multiple_files=True,
-    help="포스터 원본이나 직접 캡처한 고화질 스틸컷을 업로드하면 피드에 우선 배치됩니다."
+    help="기사 스틸컷이 부족할 때 직접 캡처한 사진이나 포스터를 올리면 엉뚱한 이미지 없이 5장이 완성됩니다."
 )
 
 # 세션 상태 초기화
@@ -164,55 +164,44 @@ def sanitize_korean_text(text):
     return text.strip()
 
 # ---------------------------------------------
-# [UX 강화] 피사체 얼굴 절단 방지 프레이밍 엔진
+# 피사체 얼굴 절단 방지 프레이밍 엔진
 # ---------------------------------------------
 def smart_fit_or_crop(base_img, target_w=1080, target_h=1350):
-    """
-    얼굴을 절대 자르지 않는 프레이밍 엔진:
-    - 세로 비율이 맞으면 상단 여백을 살려 깔끔하게 크롭
-    - 가로가 너무 긴 사진(투샷, 단체컷)은 억지로 자르지 않고
-      원본 비율을 100% 보존한 뒤 배경을 은은한 블러로 채움 (Letterbox Blur)
-    """
     base_img = base_img.convert("RGBA")
     src_w, src_h = base_img.size
     target_ratio = target_w / target_h
     src_ratio = src_w / src_h
 
-    # 가로가 지나치게 긴 경우 (비율 1.15 이상: 두 명 이상 인물 사진 등)
+    # 가로가 긴 투샷/단체컷: 레터박스 블러 처리로 얼굴 보존
     if src_ratio > 1.15:
-        # 1. 배경 블러 캔버스 생성
         bg_scale = max(target_w / src_w, target_h / src_h)
         bg_w, bg_h = int(src_w * bg_scale), int(src_h * bg_scale)
         bg = base_img.resize((bg_w, bg_h), Image.Resampling.LANCZOS)
         
-        # 중앙 크롭
         left = (bg_w - target_w) // 2
         top = (bg_h - target_h) // 2
         bg = bg.crop((left, top, left + target_w, top + target_h))
         bg = bg.filter(ImageFilter.GaussianBlur(35))
         
-        # 은은한 딤 처리
-        dark_overlay = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 90))
+        dark_overlay = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 95))
         bg = Image.alpha_composite(bg, dark_overlay)
 
-        # 2. 전면 원본 사진 (비율 100% 유지하여 중앙 상단에 배치)
         fit_scale = min(target_w / src_w, (target_h * 0.65) / src_h)
         fg_w, fg_h = int(src_w * fit_scale), int(src_h * fit_scale)
         fg = base_img.resize((fg_w, fg_h), Image.Resampling.LANCZOS)
 
         pos_x = (target_w - fg_w) // 2
-        pos_y = 120 # 상단 적정 높이에 배치하여 얼굴 및 상반신 전체 노출
+        pos_y = 120
         bg.paste(fg, (pos_x, pos_y), fg)
         return bg
 
-    # 세로형 또는 정방형에 가까운 사진: 상단 여백을 보존하며 크롭
+    # 세로형 또는 정방형 사진: 상단 여백 확보 크롭
     if src_ratio > target_ratio:
         new_w = int(src_h * target_ratio)
         left_offset = int((src_w - new_w) * 0.45)
         cropped = base_img.crop((left_offset, 0, left_offset + new_w, src_h))
     else:
         new_h = int(src_w / target_ratio)
-        # 상단 인물 머리가 잘리지 않도록 윗부분 우선 확보
         top_offset = int((src_h - new_h) * 0.10)
         top_offset = max(0, min(top_offset, src_h - new_h))
         cropped = base_img.crop((0, top_offset, src_w, top_offset + new_h))
@@ -220,23 +209,19 @@ def smart_fit_or_crop(base_img, target_w=1080, target_h=1350):
     return cropped.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
 # ---------------------------------------------
-# 로고 및 단색 그래픽 자동 필터링 (Entropy & Color Variance)
+# 로고 및 단색 그래픽 자동 필터링 (Variance 체크)
 # ---------------------------------------------
 def is_valid_photo(pil_img):
-    """언론사 CI 로고, 단색 아이콘, 지나치게 단순한 그래픽을 자동 차단"""
     if pil_img.width < 350 or pil_img.height < 350:
         return False
     
-    # 그레이스케일 변환 후 표준편차 분석 (단색/로고는 표준편차가 매우 낮거나 극단적임)
     gray = pil_img.convert("L")
     stat = ImageStat.Stat(gray)
     stddev = stat.stddev[0]
     
-    # 표준편차가 35 미만이면 거의 단색 그래픽/단순 로고로 판정하여 제외
     if stddev < 35:
         return False
 
-    # 극단적인 와이드 배너 제외
     ratio = pil_img.width / pil_img.height
     if ratio < 0.45 or ratio > 2.6:
         return False
@@ -275,33 +260,6 @@ def download_image_pil(img_url):
     except:
         pass
     return None
-
-def fetch_keyword_stock_image(keyword, fallback_img=None):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    clean_keyword = urllib.parse.quote(keyword.strip()) if keyword else "editorial"
-    search_url = f"https://source.unsplash.com/1080x1350/?{clean_keyword}"
-    try:
-        res = requests.get(search_url, headers=headers, timeout=5, allow_redirects=True)
-        if res.status_code == 200 and len(res.content) > 5000:
-            return Image.open(BytesIO(res.content))
-    except:
-        pass
-
-    try:
-        seed_hash = abs(hash(keyword)) % 1000
-        res = requests.get(f"https://picsum.photos/seed/{seed_hash}/1080/1350", headers=headers, timeout=5)
-        if res.status_code == 200:
-            return Image.open(BytesIO(res.content))
-    except:
-        pass
-
-    if fallback_img:
-        try:
-            return fallback_img.copy().filter(ImageFilter.GaussianBlur(25))
-        except:
-            pass
-
-    return Image.new("RGB", (1080, 1350), color=(18, 24, 34))
 
 # Pydantic 모델
 class SlideItem(BaseModel):
@@ -438,7 +396,6 @@ def build_local_editorial_script(title, text):
 # UX 가독성 단락 조판 (Measure Formatting)
 # ---------------------------------------------
 def format_lines_by_measure(text, max_chars_per_line):
-    """의미 단위 끊김을 방지하고 문맥 호흡을 살리는 조판"""
     words = text.strip().split()
     lines, curr = [], ""
     for w in words:
@@ -456,10 +413,8 @@ def render_trendportal_card(page, total_pages, title, content, base_img, fonts, 
     title_font, content_font, tag_font, page_font = fonts
     width, height = 1080, 1350
 
-    # 1. 피사체 보호 프레이밍 (얼굴 절단 원천 차단)
     base_img = smart_fit_or_crop(base_img, width, height)
 
-    # 2. 다크 그라데이션
     gradient = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     g_draw = ImageDraw.Draw(gradient)
 
@@ -478,7 +433,6 @@ def render_trendportal_card(page, total_pages, title, content, base_img, fonts, 
     card = Image.alpha_composite(base_img, gradient).convert("RGB")
     draw = ImageDraw.Draw(card)
 
-    # 3. 상단 브랜드 뱃지
     tag_clean = tag_text.strip()
     tag_bbox = draw.textbbox((0, 0), tag_clean, font=tag_font)
     t_text_w = tag_bbox[2] - tag_bbox[0]
@@ -497,7 +451,6 @@ def render_trendportal_card(page, total_pages, title, content, base_img, fonts, 
     draw.text((bx1 + 34, by1 + ((badge_h - t_text_h) // 2) - 2), tag_clean, font=tag_font, fill=(255, 255, 255))
     draw.text((930, 70), f"{page} / {total_pages}", font=page_font, fill=(203, 213, 225))
 
-    # 4. 정제된 텍스트 조판
     clean_title = sanitize_korean_text(title)
     clean_content = sanitize_korean_text(content)
 
@@ -514,22 +467,18 @@ def render_trendportal_card(page, total_pages, title, content, base_img, fonts, 
     c_start_y = (line_y - 32) - total_c_h
     t_start_y = (c_start_y - 42) - total_t_h
 
-    # 포인트 옐로우 액센트 바
     draw.rounded_rectangle([64, t_start_y - 20, 114, t_start_y - 13], radius=4, fill=(250, 204, 21))
 
-    # 제목
     curr_y = t_start_y
     for l in t_lines:
         draw.text((64, curr_y), l, font=title_font, fill=(255, 255, 255))
         curr_y += t_line_height
 
-    # 본문
     curr_y = c_start_y
     for l in c_lines:
         draw.text((64, curr_y), l, font=content_font, fill=(226, 232, 240))
         curr_y += c_line_height
 
-    # 하단 디바이더 및 푸터 CTA
     draw.line([64, line_y, 1016, line_y], fill=(51, 65, 85, 180), width=2)
     footer_y = line_y + 20
 
@@ -716,7 +665,6 @@ if st.session_state.headline_candidates:
                     page = slide["page"]
                     title = slide["headline"]
                     content = slide["subhead"]
-                    keyword = slide.get("img_keyword", "trend")
 
                     base_img = None
 
@@ -726,18 +674,21 @@ if st.session_state.headline_candidates:
                             base_img = cover_candidate
                         elif len(used_pool) > 0:
                             base_img = used_pool.pop(0)
+                        elif fallback_cover:
+                            base_img = fallback_cover
                         else:
-                            base_img = fetch_keyword_stock_image(keyword, fallback_img=fallback_cover)
+                            base_img = Image.new("RGB", (1080, 1350), color=(15, 23, 42))
                     else:
-                        # 2~5번 슬라이드
-                        if "드라마/영화" in image_mode:
-                            if len(used_pool) > 0:
-                                base_img = used_pool.pop(0)
-                            else:
-                                # 사용할 스틸컷이 소진된 경우 고화질 실사 스톡 이미지 활용
-                                base_img = fetch_keyword_stock_image(keyword, fallback_img=fallback_cover)
+                        # 2~5번 슬라이드: 준비된 스틸컷 소진
+                        if len(used_pool) > 0:
+                            base_img = used_pool.pop(0)
                         else:
-                            base_img = fetch_keyword_stock_image(keyword, fallback_img=fallback_cover)
+                            # [핵심] 스틸컷이 소진되었을 때 엉뚱한 외부 랜덤 사진(딸기 등) 절대 금지!
+                            # 메인 대표 스틸컷을 블러/다크 톤다운하여 세련된 엔딩 카드로 연출
+                            if fallback_cover:
+                                base_img = fallback_cover.copy().filter(ImageFilter.GaussianBlur(18))
+                            else:
+                                base_img = Image.new("RGB", (1080, 1350), color=(15, 23, 42))
 
                     card = render_trendportal_card(page, total_slides_count, title, content, base_img, fonts, tag_text=brand_tag)
                     
@@ -767,7 +718,7 @@ if st.session_state.headline_candidates:
 # 3단계: 화면 표시
 # ---------------------------------------------
 if st.session_state.rendered_images and st.session_state.zip_data:
-    st.success("🎉 인물 절단 및 로고 유입 없이 완성도 높은 피드가 생성되었습니다!")
+    st.success("🎉 외부 엉뚱한 이미지 없이 완성도 높은 매거진 피드가 생성되었습니다!")
 
     st.download_button(
         label="📦 트렌디라이프 피드 한 번에 다운로드 (ZIP)",
