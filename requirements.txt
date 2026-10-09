@@ -1,6 +1,7 @@
 streamlit
 google-genai
 newspaper3k
+lxml_html_clean
 pillow
 pydantic
 requests
