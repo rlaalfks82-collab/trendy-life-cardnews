@@ -1,0 +1,6 @@
+streamlit
+google-genai
+newspaper3k
+pillow
+pydantic
+requests
