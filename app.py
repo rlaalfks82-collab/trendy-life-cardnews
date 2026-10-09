@@ -3,7 +3,6 @@ import json
 import time
 import zipfile
 import urllib.parse
-import hashlib
 from datetime import datetime
 from io import BytesIO
 import requests
@@ -118,20 +117,46 @@ def load_fonts(t_sz, c_sz):
 
     return (title_font, content_font, badge_font, page_font)
 
-# 이미지 다운로드 및 바이트 반환
-def download_image_bytes(img_url):
+# ---------------------------------------------
+# 유사 이미지 판별 알고리즘 (Difference Hash)
+# ---------------------------------------------
+def calculate_dhash(image):
+    """크기나 압축률이 달라도 시각적으로 같은 사진인지 비교하는 64비트 해시"""
+    img_gray = image.convert("L").resize((9, 8), Image.Resampling.LANCZOS)
+    pixels = list(img_gray.getdata())
+    diff = []
+    for row in range(8):
+        for col in range(8):
+            pixel_left = pixels[row * 9 + col]
+            pixel_right = pixels[row * 9 + col + 1]
+            diff.append(pixel_left > pixel_right)
+    return diff
+
+def is_duplicate_visual(new_hash, existing_hashes, threshold=10):
+    """해밍 거리가 10 이하이면 사실상 같은 사진으로 판정"""
+    for h in existing_hashes:
+        dist = sum(el1 != el2 for el1, el2 in zip(new_hash, h))
+        if dist <= threshold:
+            return True
+    return False
+
+def download_image_pil(img_url):
     if not img_url:
         return None
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
         res = requests.get(img_url, headers=headers, timeout=6)
-        if res.status_code == 200 and len(res.content) > 4000:
-            return res.content
+        if res.status_code == 200 and len(res.content) > 5000:
+            img = Image.open(BytesIO(res.content))
+            # 가로/세로 최소 380px 이상, 극단적인 배너 비율 배제
+            if img.width >= 380 and img.height >= 380:
+                ratio = img.width / img.height
+                if 0.4 <= ratio <= 2.5:
+                    return img
     except:
         pass
     return None
 
-# 키워드 스톡 이미지
 def fetch_keyword_stock_image(keyword, fallback_img=None):
     headers = {"User-Agent": "Mozilla/5.0"}
     clean_keyword = urllib.parse.quote(keyword.strip()) if keyword else "editorial"
@@ -228,7 +253,7 @@ def call_gemini_script(prompt):
                     break
     raise Exception(f"스크립트 생성 실패: {last_err}")
 
-def render_trendportal_card(page, title, content, base_img, fonts, tag_text="TREND ISSUE"):
+def render_trendportal_card(page, total_pages, title, content, base_img, fonts, tag_text="What's today?"):
     title_font, content_font, tag_font, page_font = fonts
     width, height = 1080, 1350
 
@@ -280,7 +305,7 @@ def render_trendportal_card(page, title, content, base_img, fonts, tag_text="TRE
     dot_y = by1 + (badge_h // 2)
     draw.ellipse([bx1 + 16, dot_y - 5, bx1 + 26, dot_y + 5], fill=(250, 204, 21))
     draw.text((bx1 + 36, by1 + ((badge_h - t_text_h) // 2) - 2), tag_clean, font=tag_font, fill=(255, 255, 255))
-    draw.text((945, 72), f"{page} / 5", font=page_font, fill=(203, 213, 225))
+    draw.text((930, 72), f"{page} / {total_pages}", font=page_font, fill=(203, 213, 225))
 
     t_clean = title.replace("\n", " ").strip()
     t_words = t_clean.split()
@@ -333,7 +358,7 @@ def render_trendportal_card(page, title, content, base_img, fonts, tag_text="TRE
 
     if page == 1:
         draw.text((64, footer_y), ">> 옆으로 넘겨서 전체 내용 확인하기", font=tag_font, fill=(250, 204, 21))
-    elif page == 5:
+    elif page == total_pages:
         draw.text((64, footer_y), "Q. 여러분의 생각을 댓글로 남겨주세요!", font=tag_font, fill=(52, 211, 153))
     else:
         draw.text((64, footer_y), "@TRENDY.LIFE_NEWWWS · DAILY ISSUE", font=tag_font, fill=(148, 163, 184))
@@ -351,7 +376,6 @@ if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="
             try:
                 raw_image_urls = []
 
-                # 기사 1 파싱
                 art1 = Article(news_url_1, language='ko')
                 art1.download()
                 art1.parse()
@@ -363,7 +387,6 @@ if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="
                 for img in art1.images:
                     raw_image_urls.append(img)
 
-                # 기사 2 파싱
                 if news_url_2.strip():
                     try:
                         art2 = Article(news_url_2, language='ko')
@@ -377,12 +400,11 @@ if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="
                     except Exception as e:
                         st.warning(f"두 번째 기사 분석에 실패하여 첫 번째 기사로만 진행합니다: {e}")
 
-                # URL 기반 중복 제거 (필터링)
                 unique_urls = []
                 seen_urls = set()
                 for u in raw_image_urls:
                     if u and u.startswith("http") and not u.endswith(".svg"):
-                        clean_u = u.split("?")[0]  # 쿼리 파라미터 제외 기준 정규화
+                        clean_u = u.split("?")[0]
                         if clean_u not in seen_urls:
                             seen_urls.add(clean_u)
                             unique_urls.append(u)
@@ -422,10 +444,11 @@ if st.session_state.headline_candidates:
 
     if st.button("🚀 선택한 헤드라인으로 카드뉴스 완성하기", type="primary", use_container_width=True):
         art = st.session_state.article_data
-        with st.spinner("슬라이드 대본 작성 및 이미지를 합성 중입니다..."):
+        with st.spinner("지각 해시 기반 중복 사진 제거 및 카드뉴스를 합성 중입니다..."):
             script_prompt = f"""
             당신은 인스타그램 트렌드 매거진(@trendy.life_newwws) 전문 에디터입니다.
             표지 제목은 반드시 "{selected_headline}"을 사용하세요.
+            반드시 5장의 슬라이드(page 1부터 5까지)를 구성하세요.
             각 슬라이드의 내용과 가장 잘 어울리는 검색 키워드를 'img_keyword'에 영어 1~2단어로 작성하세요.
             슬라이드 본문(subhead)은 2~3줄 내외(120자 이내)로 작성하고 이모지는 포함하지 마세요.
 
@@ -440,28 +463,24 @@ if st.session_state.headline_candidates:
                 os.makedirs(folder_name, exist_ok=True)
 
                 # ========================================================
-                # [중복 방지 핵심 검증] MD5 해시 기반 고유 이미지 풀 구축
+                # [dHash 시각적 유사도 검사] 중복 사진 및 로고 필터링
                 # ========================================================
-                verified_unique_images = []
-                seen_hashes = set()
+                unique_images_pool = []
+                unique_hashes = []
 
                 for img_url in art.get("image_urls", []):
-                    img_bytes = download_image_bytes(img_url)
-                    if img_bytes:
-                        img_hash = hashlib.md5(img_bytes).hexdigest()
-                        if img_hash not in seen_hashes:
-                            try:
-                                pil_img = Image.open(BytesIO(img_bytes))
-                                # 너무 작은 아이콘/로고(350px 미만) 제외
-                                if pil_img.width >= 350 or pil_img.height >= 350:
-                                    seen_hashes.add(img_hash)
-                                    verified_unique_images.append(pil_img)
-                            except:
-                                pass
+                    img_obj = download_image_pil(img_url)
+                    if img_obj:
+                        h = calculate_dhash(img_obj)
+                        # 이전 사진들과 85% 이상 일치하는 중복 사진 배제
+                        if not is_duplicate_visual(h, unique_hashes, threshold=10):
+                            unique_hashes.append(h)
+                            unique_images_pool.append(img_obj)
 
                 saved_images = []
-                used_image_pool = verified_unique_images.copy()
-                first_img_for_fallback = verified_unique_images[0] if verified_unique_images else None
+                used_pool = unique_images_pool.copy()
+                fallback_cover = unique_images_pool[0] if unique_images_pool else None
+                total_slides_count = len(data["slides"])
 
                 for idx, slide in enumerate(data["slides"]):
                     page = slide["page"]
@@ -471,21 +490,19 @@ if st.session_state.headline_candidates:
 
                     base_img = None
 
-                    # 드라마/영화 모드: 준비된 고유 이미지 풀에서 순서대로 1장씩 소진 (중복 원천 방지)
                     if "드라마/영화" in image_mode:
-                        if len(used_image_pool) > 0:
-                            base_img = used_image_pool.pop(0)
+                        # 중복 없는 고유 스틸컷 풀에서 순서대로 꺼내기
+                        if len(used_pool) > 0:
+                            base_img = used_pool.pop(0)
                         else:
-                            # 고유 이미지가 5장보다 부족할 경우에만 키워드 스톡 이미지 활용
-                            base_img = fetch_keyword_stock_image(keyword, fallback_img=first_img_for_fallback)
+                            base_img = fetch_keyword_stock_image(keyword, fallback_img=fallback_cover)
                     else:
-                        # 일반 모드: 1번만 기사 대표 이미지, 나머지는 키워드 맞춤 이미지
-                        if page == 1 and len(used_image_pool) > 0:
-                            base_img = used_image_pool.pop(0)
+                        if page == 1 and len(used_pool) > 0:
+                            base_img = used_pool.pop(0)
                         else:
-                            base_img = fetch_keyword_stock_image(keyword, fallback_img=first_img_for_fallback)
+                            base_img = fetch_keyword_stock_image(keyword, fallback_img=fallback_cover)
 
-                    card = render_trendportal_card(page, title, content, base_img, fonts, tag_text=brand_tag)
+                    card = render_trendportal_card(page, total_slides_count, title, content, base_img, fonts, tag_text=brand_tag)
                     
                     save_path = os.path.join(folder_name, f"slide_{page}.png")
                     card.save(save_path)
@@ -510,13 +527,13 @@ if st.session_state.headline_candidates:
                 st.error(f"생성 실패: {e}")
 
 # ---------------------------------------------
-# 3단계: 화면 표시
+# 3단계: 화면 표시 (IndexError 방어)
 # ---------------------------------------------
 if st.session_state.rendered_images and st.session_state.zip_data:
-    st.success("🎉 중복 없는 고유 스틸컷으로 피드 5장이 완성되었습니다!")
+    st.success("🎉 시각적 중복 검증을 마친 고유 피드가 완성되었습니다!")
 
     st.download_button(
-        label="📦 트렌디라이프 피드 5장 + 캡션 한 번에 다운로드 (ZIP)",
+        label="📦 트렌디라이프 피드 한 번에 다운로드 (ZIP)",
         data=st.session_state.zip_data,
         file_name=st.session_state.zip_filename,
         mime="application/zip",
@@ -525,7 +542,10 @@ if st.session_state.rendered_images and st.session_state.zip_data:
 
     st.write("---")
     st.subheader("🖼️ 생성된 피드 미리보기")
-    grid_cols = st.columns(5)
+    
+    # [IndexError 해결] 생성된 슬라이드 개수에 맞춰 동적 컬럼 생성
+    total_imgs = len(st.session_state.rendered_images)
+    grid_cols = st.columns(total_imgs)
     for idx, img in enumerate(st.session_state.rendered_images):
         with grid_cols[idx]:
             st.image(img, caption=f"{idx + 1}번 슬라이드", use_container_width=True)
