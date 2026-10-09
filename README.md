@@ -1,0 +1,1 @@
+# trendy-life-cardnews
