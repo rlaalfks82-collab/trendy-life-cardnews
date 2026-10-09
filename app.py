@@ -3,6 +3,7 @@ import json
 import time
 import zipfile
 import urllib.parse
+import hashlib
 from datetime import datetime
 from io import BytesIO
 import requests
@@ -117,18 +118,20 @@ def load_fonts(t_sz, c_sz):
 
     return (title_font, content_font, badge_font, page_font)
 
-def download_image_from_url(img_url):
+# 이미지 다운로드 및 바이트 반환
+def download_image_bytes(img_url):
     if not img_url:
         return None
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        res = requests.get(img_url, headers=headers, timeout=5)
-        if res.status_code == 200 and len(res.content) > 3000:
-            return Image.open(BytesIO(res.content))
+        res = requests.get(img_url, headers=headers, timeout=6)
+        if res.status_code == 200 and len(res.content) > 4000:
+            return res.content
     except:
         pass
     return None
 
+# 키워드 스톡 이미지
 def fetch_keyword_stock_image(keyword, fallback_img=None):
     headers = {"User-Agent": "Mozilla/5.0"}
     clean_keyword = urllib.parse.quote(keyword.strip()) if keyword else "editorial"
@@ -346,6 +349,8 @@ if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="
     else:
         with st.spinner("기사 본문과 스틸컷 이미지들을 추출하고 있습니다..."):
             try:
+                raw_image_urls = []
+
                 # 기사 1 파싱
                 art1 = Article(news_url_1, language='ko')
                 art1.download()
@@ -353,29 +358,39 @@ if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="
 
                 combined_title = art1.title
                 combined_text = f"[기사 1]\n{art1.text}"
-                all_images = [img for img in art1.images if img.startswith("http") and not img.endswith(".svg")]
-                top_image = art1.top_image
+                if art1.top_image:
+                    raw_image_urls.append(art1.top_image)
+                for img in art1.images:
+                    raw_image_urls.append(img)
 
-                # 기사 2가 있을 경우 통합
+                # 기사 2 파싱
                 if news_url_2.strip():
                     try:
                         art2 = Article(news_url_2, language='ko')
                         art2.download()
                         art2.parse()
                         combined_text += f"\n\n[기사 2]\n{art2.text}"
+                        if art2.top_image:
+                            raw_image_urls.append(art2.top_image)
                         for img in art2.images:
-                            if img.startswith("http") and not img.endswith(".svg") and img not in all_images:
-                                all_images.append(img)
-                        if not top_image and art2.top_image:
-                            top_image = art2.top_image
+                            raw_image_urls.append(img)
                     except Exception as e:
                         st.warning(f"두 번째 기사 분석에 실패하여 첫 번째 기사로만 진행합니다: {e}")
+
+                # URL 기반 중복 제거 (필터링)
+                unique_urls = []
+                seen_urls = set()
+                for u in raw_image_urls:
+                    if u and u.startswith("http") and not u.endswith(".svg"):
+                        clean_u = u.split("?")[0]  # 쿼리 파라미터 제외 기준 정규화
+                        if clean_u not in seen_urls:
+                            seen_urls.add(clean_u)
+                            unique_urls.append(u)
 
                 st.session_state.article_data = {
                     "title": combined_title,
                     "text": combined_text,
-                    "top_image": top_image,
-                    "all_images": all_images
+                    "image_urls": unique_urls
                 }
 
                 cand_prompt = f"""
@@ -424,15 +439,29 @@ if st.session_state.headline_candidates:
                 folder_name = datetime.now().strftime("card_news_%Y%m%d_%H%M%S")
                 os.makedirs(folder_name, exist_ok=True)
 
-                saved_images = []
-                top_img_original = download_image_from_url(art.get("top_image"))
+                # ========================================================
+                # [중복 방지 핵심 검증] MD5 해시 기반 고유 이미지 풀 구축
+                # ========================================================
+                verified_unique_images = []
+                seen_hashes = set()
 
-                # 기사 내 모든 스틸컷 풀 다운로드 및 필터링
-                article_images_pool = []
-                for img_url in art.get("all_images", []):
-                    img_obj = download_image_from_url(img_url)
-                    if img_obj and (img_obj.width >= 350 or img_obj.height >= 350):
-                        article_images_pool.append(img_obj)
+                for img_url in art.get("image_urls", []):
+                    img_bytes = download_image_bytes(img_url)
+                    if img_bytes:
+                        img_hash = hashlib.md5(img_bytes).hexdigest()
+                        if img_hash not in seen_hashes:
+                            try:
+                                pil_img = Image.open(BytesIO(img_bytes))
+                                # 너무 작은 아이콘/로고(350px 미만) 제외
+                                if pil_img.width >= 350 or pil_img.height >= 350:
+                                    seen_hashes.add(img_hash)
+                                    verified_unique_images.append(pil_img)
+                            except:
+                                pass
+
+                saved_images = []
+                used_image_pool = verified_unique_images.copy()
+                first_img_for_fallback = verified_unique_images[0] if verified_unique_images else None
 
                 for idx, slide in enumerate(data["slides"]):
                     page = slide["page"]
@@ -442,21 +471,19 @@ if st.session_state.headline_candidates:
 
                     base_img = None
 
-                    # 이미지 배치 로직
+                    # 드라마/영화 모드: 준비된 고유 이미지 풀에서 순서대로 1장씩 소진 (중복 원천 방지)
                     if "드라마/영화" in image_mode:
-                        if idx < len(article_images_pool):
-                            base_img = article_images_pool[idx]
-                        elif top_img_original:
-                            base_img = top_img_original
+                        if len(used_image_pool) > 0:
+                            base_img = used_image_pool.pop(0)
                         else:
-                            base_img = fetch_keyword_stock_image(keyword, fallback_img=top_img_original)
+                            # 고유 이미지가 5장보다 부족할 경우에만 키워드 스톡 이미지 활용
+                            base_img = fetch_keyword_stock_image(keyword, fallback_img=first_img_for_fallback)
                     else:
-                        if page == 1 and top_img_original:
-                            base_img = top_img_original
-                        elif page == 2 and len(article_images_pool) > 0:
-                            base_img = article_images_pool[0]
+                        # 일반 모드: 1번만 기사 대표 이미지, 나머지는 키워드 맞춤 이미지
+                        if page == 1 and len(used_image_pool) > 0:
+                            base_img = used_image_pool.pop(0)
                         else:
-                            base_img = fetch_keyword_stock_image(keyword, fallback_img=top_img_original)
+                            base_img = fetch_keyword_stock_image(keyword, fallback_img=first_img_for_fallback)
 
                     card = render_trendportal_card(page, title, content, base_img, fonts, tag_text=brand_tag)
                     
@@ -486,7 +513,7 @@ if st.session_state.headline_candidates:
 # 3단계: 화면 표시
 # ---------------------------------------------
 if st.session_state.rendered_images and st.session_state.zip_data:
-    st.success("🎉 두 기사의 스틸컷과 팩트를 반영한 피드 5장이 완성되었습니다!")
+    st.success("🎉 중복 없는 고유 스틸컷으로 피드 5장이 완성되었습니다!")
 
     st.download_button(
         label="📦 트렌디라이프 피드 5장 + 캡션 한 번에 다운로드 (ZIP)",
