@@ -43,21 +43,31 @@ st.sidebar.header("🎨 트렌디라이프 디자인 옵션")
 image_mode = st.sidebar.radio(
     "📸 이미지 생성 모드 선택",
     [
-        "🎬 드라마/영화/콘텐츠 모드 (두 기사의 스틸컷·포스터 집중 활용)",
-        "🎨 일반 맞춤형 모드 (기사 대표사진 + 슬라이드별 맞춤 실사)"
+        "🎬 드라마/영화/콘텐츠 모드 (스틸컷·첨부사진 집중 활용)",
+        "🎨 일반 맞춤형 모드 (표지 사진 + 슬라이드별 맞춤 실사)"
+    ],
+    index=0
+)
+
+# 1번 슬라이드 이미지 우선순위 선택
+cover_source_choice = st.sidebar.radio(
+    "🌟 1번 표지 슬라이드 이미지 선택",
+    [
+        "기사 원문 대표 이미지 우선",
+        "내가 직접 첨부한 이미지 우선"
     ],
     index=0
 )
 
 title_size = st.sidebar.slider("제목 글자 크기", min_value=46, max_value=64, value=54, step=2)
 content_size = st.sidebar.slider("본문 글자 크기", min_value=24, max_value=34, value=28, step=2)
-brand_tag = st.sidebar.text_input("상단 브랜딩 태그", value="What's today?")
+brand_tag = st.sidebar.text_input("상단 브랜딩 태그", value="TREND ISSUE")
 
 # 메인 헤더
 st.markdown("""
 <div style="text-align: center; line-height: 1.35; margin-bottom: 25px;">
     <h2 style="color: #0F172A; margin-bottom: 8px; font-weight: 800;">🔥 트렌디라이프 멀티기사 카드뉴스 생성기</h2>
-    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">중복 사진 필터링 및 AI 에러 방어 로직이 적용된 테스트 안정 버전</p>
+    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">기사 원문 스틸컷과 직접 첨부한 이미지를 자유롭게 조합하여 완성합니다</p>
 </div>
 """, unsafe_allow_html=True)
 st.write("---")
@@ -67,6 +77,13 @@ with col_url1:
     news_url_1 = st.text_input("🔗 첫 번째 뉴스 기사 링크 (필수)", placeholder="메인 기사 URL을 입력하세요.")
 with col_url2:
     news_url_2 = st.text_input("🔗 두 번째 뉴스 기사 링크 (선택)", placeholder="관련 추가 기사 URL을 입력하세요.")
+
+uploaded_custom_files = st.file_uploader(
+    "📁 직접 사용할 추가 이미지 첨부 (선택, 여러 장 가능)",
+    type=["png", "jpg", "jpeg", "webp"],
+    accept_multiple_files=True,
+    help="기사 스틸컷 외에 직접 소장한 포스터나 고화질 사진을 함께 합성 풀에 추가합니다."
+)
 
 # 세션 상태 초기화
 if "article_data" not in st.session_state:
@@ -125,9 +142,7 @@ def load_fonts(t_sz, c_sz):
 
     return (title_font, content_font, badge_font, page_font)
 
-# ---------------------------------------------
 # 시각적 중복 이미지 판별 (dHash)
-# ---------------------------------------------
 def calculate_dhash(image):
     img_gray = image.convert("L").resize((9, 8), Image.Resampling.LANCZOS)
     pixels = list(img_gray.getdata())
@@ -201,9 +216,6 @@ class CardNewsResponse(BaseModel):
 class HeadlineCandidates(BaseModel):
     titles: List[str]
 
-# ---------------------------------------------
-# 무중단 AI 호출 엔진 (429/404 발생 시 모델 자동 순환)
-# ---------------------------------------------
 FALLBACK_MODELS = [
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
@@ -233,13 +245,12 @@ def call_gemini_headlines(prompt, default_title):
                 continue
             time.sleep(1)
 
-    # 모든 AI 모델이 제한되었을 때 안전 모드 작동 (에러로 멈추지 않음)
-    st.info("💡 AI 할당량 소진으로 로컬 스마트 분석 모드로 안전하게 헤드라인을 생성했습니다.")
+    st.info("💡 AI 할당량 소진으로 로컬 스마트 분석 모드로 헤드라인을 생성했습니다.")
     return {
         "titles": [
             f"\"{default_title}\"",
             f"요즘 화제라는 '{default_title[:18]}' 도대체 무슨 일?",
-            f"실시간 논란 확산 중인 '{default_title[:18]}' 핵심 정리"
+            f"실시간 이슈 확산 중인 '{default_title[:18]}' 핵심 정리"
         ]
     }
 
@@ -286,9 +297,6 @@ def build_local_fallback_script(title, text):
         "caption": f"🔥 {title}\n\n상세한 내용은 피드에서 확인해 보세요!\n\n#이슈 #트렌드 #뉴스 #트렌디라이프"
     }
 
-# ---------------------------------------------
-# 렌더링 엔진
-# ---------------------------------------------
 def render_trendportal_card(page, total_pages, title, content, base_img, fonts, tag_text="TREND ISSUE"):
     title_font, content_font, tag_font, page_font = fonts
     width, height = 1080, 1350
@@ -402,7 +410,7 @@ def render_trendportal_card(page, total_pages, title, content, base_img, fonts, 
     return card
 
 # ---------------------------------------------
-# 1단계: 기사 2개 통합 분석
+# 1단계: 기사 분석
 # ---------------------------------------------
 if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="primary", use_container_width=True):
     if not news_url_1.strip():
@@ -418,6 +426,8 @@ if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="
 
                 combined_title = art1.title
                 combined_text = f"[기사 1]\n{art1.text}"
+                top_image_url = art1.top_image
+
                 if art1.top_image:
                     raw_image_urls.append(art1.top_image)
                 for img in art1.images:
@@ -429,6 +439,8 @@ if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="
                         art2.download()
                         art2.parse()
                         combined_text += f"\n\n[기사 2]\n{art2.text}"
+                        if not top_image_url and art2.top_image:
+                            top_image_url = art2.top_image
                         if art2.top_image:
                             raw_image_urls.append(art2.top_image)
                         for img in art2.images:
@@ -448,6 +460,7 @@ if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="
                 st.session_state.article_data = {
                     "title": combined_title,
                     "text": combined_text,
+                    "top_image_url": top_image_url,
                     "image_urls": unique_urls
                 }
 
@@ -480,7 +493,7 @@ if st.session_state.headline_candidates:
 
     if st.button("🚀 선택한 헤드라인으로 카드뉴스 완성하기", type="primary", use_container_width=True):
         art = st.session_state.article_data
-        with st.spinner("시각적 중복 검증 및 슬라이드 합성을 진행 중입니다..."):
+        with st.spinner("이미지 풀 구성 및 슬라이드 합성을 진행 중입니다..."):
             script_prompt = f"""
             당신은 인스타그램 트렌드 매거진(@trendy.life_newwws) 전문 에디터입니다.
             표지 제목은 반드시 "{selected_headline}"을 사용하세요.
@@ -499,11 +512,29 @@ if st.session_state.headline_candidates:
                 os.makedirs(folder_name, exist_ok=True)
 
                 # ========================================================
-                # [중복 방지 핵심 검증] dHash 기반 지각 해시 필터링
+                # [이미지 풀 구축] 사용자 직접 첨부 + 기사 크롤링 이미지 병합
                 # ========================================================
                 unique_images_pool = []
                 unique_hashes = []
+                
+                user_first_img = None
+                article_cover_img = download_image_pil(art.get("top_image_url"))
 
+                # 1) 사용자가 직접 업로드한 이미지 로드
+                if uploaded_custom_files:
+                    for up_file in uploaded_custom_files:
+                        try:
+                            pil_u = Image.open(up_file)
+                            h = calculate_dhash(pil_u)
+                            if not is_duplicate_visual(h, unique_hashes, threshold=10):
+                                unique_hashes.append(h)
+                                unique_images_pool.append(pil_u)
+                                if user_first_img is None:
+                                    user_first_img = pil_u
+                        except:
+                            pass
+
+                # 2) 기사 본문 크롤링 이미지 로드 및 병합
                 for img_url in art.get("image_urls", []):
                     img_obj = download_image_pil(img_url)
                     if img_obj:
@@ -512,9 +543,27 @@ if st.session_state.headline_candidates:
                             unique_hashes.append(h)
                             unique_images_pool.append(img_obj)
 
+                # ========================================================
+                # [1번 표지 슬라이드 우선순위 결정]
+                # ========================================================
+                cover_candidate = None
+                if "내가 직접 첨부" in cover_source_choice and user_first_img:
+                    cover_candidate = user_first_img
+                elif article_cover_img:
+                    cover_candidate = article_cover_img
+                elif len(unique_images_pool) > 0:
+                    cover_candidate = unique_images_pool[0]
+
+                # 표지로 선정된 이미지는 2~5번 슬라이드에서 중복 사용되지 않도록 풀에서 배제
+                used_pool = []
+                cover_hash = calculate_dhash(cover_candidate) if cover_candidate else None
+                for img in unique_images_pool:
+                    if cover_hash and is_duplicate_visual(calculate_dhash(img), [cover_hash], threshold=10):
+                        continue
+                    used_pool.append(img)
+
                 saved_images = []
-                used_pool = unique_images_pool.copy()
-                fallback_cover = unique_images_pool[0] if unique_images_pool else None
+                fallback_cover = cover_candidate if cover_candidate else (unique_images_pool[0] if unique_images_pool else None)
                 total_slides_count = len(data["slides"])
 
                 for idx, slide in enumerate(data["slides"]):
@@ -525,14 +574,21 @@ if st.session_state.headline_candidates:
 
                     base_img = None
 
-                    if "드라마/영화" in image_mode:
-                        if len(used_pool) > 0:
+                    # 1번 슬라이드: 선택된 표지 이미지 적용
+                    if page == 1:
+                        if cover_candidate:
+                            base_img = cover_candidate
+                        elif len(used_pool) > 0:
                             base_img = used_pool.pop(0)
                         else:
                             base_img = fetch_keyword_stock_image(keyword, fallback_img=fallback_cover)
                     else:
-                        if page == 1 and len(used_pool) > 0:
-                            base_img = used_pool.pop(0)
+                        # 2~5번 슬라이드: 드라마 모드면 남은 고유 풀 순차 소진, 일반 모드면 맞춤 스톡 이미지
+                        if "드라마/영화" in image_mode:
+                            if len(used_pool) > 0:
+                                base_img = used_pool.pop(0)
+                            else:
+                                base_img = fetch_keyword_stock_image(keyword, fallback_img=fallback_cover)
                         else:
                             base_img = fetch_keyword_stock_image(keyword, fallback_img=fallback_cover)
 
@@ -542,7 +598,7 @@ if st.session_state.headline_candidates:
                     card.save(save_path)
                     saved_images.append(card)
 
-                # ZIP 압축
+                # ZIP 패키징
                 zip_buffer = BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                     for idx, img in enumerate(saved_images):
@@ -564,7 +620,7 @@ if st.session_state.headline_candidates:
 # 3단계: 화면 표시
 # ---------------------------------------------
 if st.session_state.rendered_images and st.session_state.zip_data:
-    st.success("🎉 피드 5장 생성이 성공적으로 완료되었습니다!")
+    st.success("🎉 첨부 사진 및 기사 원문 사진을 결합한 피드가 성공적으로 완성되었습니다!")
 
     st.download_button(
         label="📦 트렌디라이프 피드 한 번에 다운로드 (ZIP)",
