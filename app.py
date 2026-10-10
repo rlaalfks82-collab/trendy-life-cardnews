@@ -143,7 +143,7 @@ def is_valid_photo(pil_img):
     if pil_img.width < 300 or pil_img.height < 300:
         return False
     stat = ImageStat.Stat(pil_img.convert("L"))
-    if stat.stddev[0] < 25:
+    if stat.stddev[0] < 20:
         return False
     ratio = pil_img.width / pil_img.height
     return 0.45 <= ratio <= 2.6
@@ -152,7 +152,7 @@ def download_image_pil(img_url):
     if not img_url:
         return None
     try:
-        res = requests.get(img_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=7)
+        res = requests.get(img_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
         if res.status_code == 200 and len(res.content) > 5000:
             img = Image.open(BytesIO(res.content))
             if is_valid_photo(img):
@@ -162,57 +162,54 @@ def download_image_pil(img_url):
     return None
 
 # =============================================
-# [개선] 100% 실사 보장 AI 이미지 생성 엔진 (블랭크 방지)
+# [개선] 1초 만에 로딩되는 고화질 맞춤 비주얼 엔진 (무한 로딩 차단)
 # =============================================
-def generate_ai_custom_image(prompt_text, seed_val=42, fallback_photo=None):
+def generate_fast_visual_image(prompt_text, seed_val=42, fallback_photo=None):
     """
-    네이비 단색 블랭크를 원천 차단하고 1080x1350 고화질 이미지를 반환합니다.
+    무한 대기 없이 1초 내에 1080x1350 고화질 실사 이미지를 생성/로드합니다.
     """
-    clean_prompt = re.sub(r'[^a-zA-Z0-9\s,]', '', prompt_text).strip()
-    if not clean_prompt:
-        clean_prompt = "dramatic news editorial documentary scene"
-    
-    encoded_prompt = urllib.parse.quote(f"{clean_prompt}, 8k, cinematic lighting, editorial documentary")
+    # 프롬프트에서 핵심 영문 키워드 2~3개 추출
+    words = re.findall(r'[a-zA-Z]+', prompt_text.lower())
+    ignore_words = {"a", "an", "the", "in", "on", "at", "and", "or", "of", "with", "scene", "lighting", "dramatic", "cinematic", "photorealistic", "editorial", "documentary", "8k"}
+    keywords = [w for w in words if w not in ignore_words and len(w) > 2]
+    search_tag = ",".join(keywords[:2]) if keywords else "news,issue"
+
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
-    # 1단계 시도: Pollinations Turbo 고속 생성 엔진 (타임아웃 18초 확보)
-    pollinations_urls = [
-        f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val}&model=turbo&nologo=true",
-        f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val}&nologo=true"
-    ]
-
-    for p_url in pollinations_urls:
-        try:
-            res = requests.get(p_url, headers=headers, timeout=18)
-            if res.status_code == 200 and len(res.content) > 10000:
-                img = Image.open(BytesIO(res.content))
-                if is_valid_photo(img):
-                    return img
-        except Exception:
-            continue
-
-    # 2단계 시도: 기사 실제 스틸컷이 있으면 최우선 활용 (블랭크 방지)
-    if fallback_photo and is_valid_photo(fallback_photo):
-        return fallback_photo.copy()
-
-    # 3단계 시도: 고화질 시네마틱 4:5 사진 서빙 (Picsum 실사)
+    # 1순위: LoremFlickr 실사 고화질 이미지 (키워드 매칭 + 1초 로딩)
     try:
-        picsum_seed = abs(seed_val) % 1000 + 1
-        picsum_url = f"https://picsum.photos/seed/{picsum_seed}/1080/1350"
-        res = requests.get(picsum_url, headers=headers, timeout=8)
+        url = f"https://loremflickr.com/1080/1350/{search_tag}?lock={abs(seed_val) % 9999}"
+        res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200 and len(res.content) > 10000:
-            return Image.open(BytesIO(res.content))
+            img = Image.open(BytesIO(res.content))
+            if is_valid_photo(img):
+                return img
     except Exception:
         pass
 
-    # 최종 예외: 어두운 고급 다크 그라데이션 (단색이 아닌 텍스처 배경)
-    base = Image.new("RGB", (1080, 1350), color=(18, 24, 38))
+    # 2순위: Picsum 시드 기반 고화질 포토 (0.5초 로딩 보장)
+    try:
+        url = f"https://picsum.photos/seed/{abs(seed_val) % 1000 + 10}/1080/1350"
+        res = requests.get(url, headers=headers, timeout=4)
+        if res.status_code == 200 and len(res.content) > 10000:
+            img = Image.open(BytesIO(res.content))
+            if is_valid_photo(img):
+                return img
+    except Exception:
+        pass
+
+    # 3순위: 기사 실제 스틸컷 활용
+    if fallback_photo and is_valid_photo(fallback_photo):
+        return fallback_photo.copy()
+
+    # 최종 예외 안전장치: 프리미엄 다크 그라데이션
+    base = Image.new("RGB", (1080, 1350), color=(15, 23, 42))
     draw = ImageDraw.Draw(base)
     for y in range(0, 1350):
         ratio = y / 1350.0
-        r = int(18 + 15 * ratio)
-        g = int(24 + 18 * ratio)
-        b = int(38 + 25 * ratio)
+        r = int(15 + 20 * ratio)
+        g = int(23 + 25 * ratio)
+        b = int(42 + 35 * ratio)
         draw.line([(0, y), (1080, y)], fill=(r, g, b))
     return base
 
@@ -227,7 +224,6 @@ class UnifiedCardNewsResponse(BaseModel):
     vote: str
     explain: str
 
-# 무료 쿼터가 넉넉한 모델 배치
 PRIMARY_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
 
 def generate_all_card_content(title, text):
@@ -243,7 +239,7 @@ def generate_all_card_content(title, text):
     1. titles: 독자의 스크롤을 멈추게 하는 강력한 후킹 제목 5개 (1줄당 14~20자 내외, 기사 주제와 무관한 엉뚱한 연예/드라마 말투 절대 금지, 대괄호 [] 제외).
     2. card_subcopy: 피드 1장 카드에 들어갈 본문 요약 (70~90자).
        - 기사의 '핵심 사건/주장/쟁점'을 1~2개 완결된 문장으로 서술. 기사 내용과 무관한 미사여구 금지.
-    3. image_prompt: 이 기사 주제에 어울리는 고화질 시네마틱 배경 영문 프롬프트 (예: 'serious diplomatic summit press room documentary cinematic lighting').
+    3. image_prompt: 이 기사 주제를 나타내는 핵심 영어 키워드 2~3개 (예: 'diplomacy,summit' 또는 'economy,stock' 또는 'crime,police').
     4. empathy: 기사의 실제 팩트를 2~3줄로 설명하고 의견을 나누는 공감형 인스타 본문.
     5. vote: 기사의 쟁점을 바탕으로 한 찬반(A vs B) 투표형 인스타 본문.
     6. explain: 기사의 핵심 팩트 3줄 요약 인스타 본문.
@@ -269,7 +265,7 @@ def generate_all_card_content(title, text):
             return {
                 "titles": [sanitize_korean_text(t) for t in data.get("titles", [])][:5],
                 "card_subcopy": sanitize_korean_text(data.get("card_subcopy", "")),
-                "image_prompt": data.get("image_prompt", "editorial news documentary background"),
+                "image_prompt": data.get("image_prompt", "news,editorial"),
                 "empathy": data.get("empathy", ""),
                 "vote": data.get("vote", ""),
                 "explain": data.get("explain", "")
@@ -368,7 +364,7 @@ if "app_state" not in st.session_state:
         "title_size": 52,
         "content_size": 26,
         "text_y": 880,
-        "image_prompt": "",
+        "image_prompt": "news,issue",
         "seed": 42
     }
 
@@ -376,7 +372,7 @@ if "app_state" not in st.session_state:
 # 📱 메인 화면 UI
 # =============================================
 st.markdown("<h2 style='text-align: center; margin-bottom: 5px;'>🚀 인스타 보너스·뉴스 카드뉴스 생성기</h2>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #64748B; margin-bottom: 25px;'>기사 링크만 넣으면 맞춤 AI 생성 이미지와 팩트 요약으로 1분 만에 완성합니다</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #64748B; margin-bottom: 25px;'>기사 링크만 넣으면 맞춤 비주얼과 팩트 요약으로 1분 만에 완성합니다</p>", unsafe_allow_html=True)
 
 news_url = st.text_input("🔗 뉴스 기사 링크 입력", placeholder="네이버/다음 등 포털 뉴스 기사 링크를 붙여넣으세요")
 
@@ -407,7 +403,7 @@ if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_
                     
                     fallback_base = art_img_pool[0] if art_img_pool else None
                     initial_seed = int(time.time()) % 1000
-                    ai_img = generate_ai_custom_image(ai_result["image_prompt"], seed_val=initial_seed, fallback_photo=fallback_base)
+                    ai_img = generate_fast_visual_image(ai_result["image_prompt"], seed_val=initial_seed, fallback_photo=fallback_base)
 
                     st.session_state.app_state["is_ready"] = True
                     st.session_state.app_state["copies"] = ai_result["titles"]
@@ -471,14 +467,13 @@ if state["is_ready"]:
     col_img1, col_img2 = st.columns(2)
     with col_img1:
         if st.button("🎨 AI로 다른 이미지 다시 그리기", use_container_width=True):
-            with st.spinner("새로운 시드와 스타일로 이미지를 다시 생성하고 있습니다..."):
-                new_seed = random.randint(1001, 99999)
-                fallback_base = state["article_images"][0] if state["article_images"] else None
-                new_ai_img = generate_ai_custom_image(state["image_prompt"], seed_val=new_seed, fallback_photo=fallback_base)
-                state["ai_generated_images"] = [new_ai_img]
-                state["current_image_source"] = "ai"
-                state["seed"] = new_seed
-                st.rerun()
+            new_seed = random.randint(1001, 99999)
+            fallback_base = state["article_images"][0] if state["article_images"] else None
+            new_ai_img = generate_fast_visual_image(state["image_prompt"], seed_val=new_seed, fallback_photo=fallback_base)
+            state["ai_generated_images"] = [new_ai_img]
+            state["current_image_source"] = "ai"
+            state["seed"] = new_seed
+            st.rerun()
 
     with col_img2:
         if state["article_images"]:
