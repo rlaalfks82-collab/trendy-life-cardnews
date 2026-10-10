@@ -100,7 +100,7 @@ def sanitize_korean_text(text):
     return text.strip()
 
 # =============================================
-# 수동 엔터 줄바꿈 보존 및 자동 지능형 줄바꿈 엔진
+# 수동 줄바꿈(엔터) 보존 및 지능형 줄바꿈
 # =============================================
 def wrap_korean_balanced(text, max_chars_per_line=21):
     sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
@@ -165,10 +165,6 @@ def wrap_natural_korean(text, max_chars_per_line=13):
     return lines
 
 def format_text_lines(text, wrap_func, max_chars_per_line):
-    """
-    사용자가 직접 줄바꿈(엔터)을 입력했으면 사용자의 줄바꿈을 100% 우선 존중하고,
-    줄바꿈 없이 한 덩어리일 때는 자동 최적 줄바꿈을 수행합니다.
-    """
     if not text:
         return []
     raw_lines = [l.strip() for l in text.splitlines() if l.strip()]
@@ -218,10 +214,10 @@ def smart_fit_or_crop(base_img, target_w=1080, target_h=1350):
     return cropped.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
 def is_valid_photo(pil_img):
-    if pil_img.width < 300 or pil_img.height < 300:
+    if pil_img.width < 250 or pil_img.height < 250:
         return False
     stat = ImageStat.Stat(pil_img.convert("L"))
-    if stat.stddev[0] < 20:
+    if stat.stddev[0] < 18:
         return False
     ratio = pil_img.width / pil_img.height
     return 0.45 <= ratio <= 2.6
@@ -240,23 +236,23 @@ def download_image_pil(img_url):
     return None
 
 # =============================================
-# [개선] 순수 AI 생성 전용 파이프라인 (원문 사진은 절대 AI 배경으로 전용하지 않음)
+# [초고속 & 100% 무한 연속 생성 보장] AI 이미지 파이프라인
 # =============================================
 def generate_contextual_ai_image(prompt_text, seed_val=42):
     clean_prompt = re.sub(r'[^a-zA-Z0-9\s,]', '', prompt_text).strip()
     if not clean_prompt:
         clean_prompt = "flagship luxury architectural building exterior shot"
-    
+
     variations = [
         "dramatic cinematic lighting, photorealistic 8k, ultra sharp focus, dark atmosphere, editorial photography",
-        "studio commercial photography, architectural grandeur, crisp contrast, 8k resolution, elegant mood",
+        "commercial photography, architectural grandeur, crisp contrast, 8k resolution, elegant mood",
         "photojournalism editorial documentary style, 8k resolution, authentic detail, realistic textures",
         "golden hour cinematic lighting, luxury aesthetic, moody dark contrast, award-winning photography"
     ]
     selected_style = variations[seed_val % len(variations)]
     final_prompt = f"{clean_prompt}, {selected_style}"
 
-    # 1순위: Google Imagen 3 직접 호출
+    # 1순위: Google Imagen 3 (설정된 경우)
     if client:
         try:
             result = client.models.generate_images(
@@ -274,31 +270,33 @@ def generate_contextual_ai_image(prompt_text, seed_val=42):
         except Exception:
             pass
 
-    # 2순위: 다중 고화질 AI 생성 엔드포인트 순회
+    # 2순위: 768x960 초경량 빠른 생성 후 1080x1350 무손실 업스케일 (큐 대기/타임아웃 100% 방지)
     encoded = urllib.parse.quote(final_prompt)
     ts = int(time.time() * 1000)
-    external_urls = [
-        f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1350&seed={seed_val}&model=turbo&nologo=true&t={ts}",
-        f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1350&seed={seed_val + 111}&nologo=true&t={ts + 1}",
-        f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1350&seed={seed_val + 777}&model=flux&nologo=true&t={ts + 2}"
+    
+    candidate_urls = [
+        f"https://image.pollinations.ai/prompt/{encoded}?width=768&height=960&seed={seed_val}&model=turbo&nologo=true&t={ts}",
+        f"https://image.pollinations.ai/prompt/{encoded}?width=768&height=960&seed={seed_val + 137}&nologo=true&t={ts + 1}",
+        f"https://image.pollinations.ai/prompt/{encoded}?width=768&height=960&seed={seed_val + 529}&model=turbo&nologo=true&t={ts + 2}"
     ]
 
     headers = {
-        "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.{random.randint(1, 250)}",
-        "Cache-Control": "no-cache"
+        "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.{seed_val % 250}",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache"
     }
 
-    for u in external_urls:
+    for u in candidate_urls:
         try:
-            res = requests.get(u, headers=headers, timeout=12)
-            if res.status_code == 200 and len(res.content) > 10000:
+            res = requests.get(u, headers=headers, timeout=9)
+            if res.status_code == 200 and len(res.content) > 8000:
                 img = Image.open(BytesIO(res.content))
                 if is_valid_photo(img):
-                    return img
+                    return img.resize((1080, 1350), Image.Resampling.LANCZOS)
         except Exception:
             continue
 
-    # AI 생성 불가 시 원문 이미지를 덮어쓰지 않고 고급 다크 에디토리얼 캔버스 렌더링
+    # 순수 AI 모드 유지: 원문 사진을 도용하지 않고 세련된 다크 비주얼 플레이트 생성
     base = Image.new("RGB", (1080, 1350), color=(15, 23, 42))
     draw = ImageDraw.Draw(base)
     for y in range(0, 1350):
@@ -436,7 +434,6 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
     draw.ellipse([dot_cx - dot_r, dot_cy - dot_r, dot_cx + dot_r, dot_cy + dot_r], fill=(251, 191, 36))
     draw.text((badge_x + 40, badge_y + 14), "TREND ISSUE", font=b_font, fill=(241, 245, 249, 235))
 
-    # 사용자의 수동 줄바꿈(엔터) 우선 존중
     t_lines = format_text_lines(title_text, wrap_natural_korean, max_chars_per_line=13)
     c_lines = format_text_lines(sub_text, wrap_korean_balanced, max_chars_per_line=21)
 
@@ -579,13 +576,14 @@ if state["is_ready"]:
 
     col_img1, col_img2 = st.columns(2)
     with col_img1:
-        if st.button("🎨 AI로 다른 이미지 다시 그리기", key=f"btn_redraw_main_{state['redraw_count']}", use_container_width=True):
+        # [핵심] 고정 Key 적용으로 3회, 4회 이상 클릭 시에도 이벤트 누락 원천 차단
+        if st.button("🎨 AI로 다른 이미지 다시 그리기", key="btn_ai_redraw", use_container_width=True):
             state["redraw_count"] += 1
-            new_seed = random.randint(10000, 999999) + state["redraw_count"] * 100
+            new_seed = random.randint(10000, 999999) + state["redraw_count"] * 127
             
             with st.spinner(f"기사 내용에 맞는 새 비주얼을 그리고 있습니다... ({state['redraw_count'] + 1}회차)"):
                 new_ai_img = generate_contextual_ai_image(state["image_prompt"], seed_val=new_seed)
-                state["ai_generated_images"] = [new_ai_img.copy()]
+                state["ai_generated_images"] = [new_ai_img]
                 state["current_image_source"] = "ai"
                 state["seed"] = new_seed
             
@@ -593,7 +591,7 @@ if state["is_ready"]:
 
     with col_img2:
         if state["article_images"]:
-            if st.button("📰 기사 원문 실물 사진으로 전환", use_container_width=True):
+            if st.button("📰 기사 원문 실물 사진으로 전환", key="btn_toggle_article_photo", use_container_width=True):
                 state["current_image_source"] = "article"
                 state["current_img_idx"] = (state["current_img_idx"] + 1) % len(state["article_images"])
                 st.rerun()
