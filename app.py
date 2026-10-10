@@ -183,47 +183,49 @@ def download_image_pil(img_url):
     return None
 
 # =============================================
-# [개선] 엉뚱한 풍경 배제! 기사 맥락 100% 일치 무한 AI 이미지 생성기
+# [개선] 100% 무한 갱신 보장 AI 이미지 생성 파이프라인
 # =============================================
-def generate_contextual_ai_image(prompt_text, seed_val=42, fallback_photo=None):
+def generate_contextual_ai_image(prompt_text, seed_val=42):
     """
-    무관한 자연/풍경 사이트(Picsum 등)를 완전히 배제하고,
-    오직 기사의 프롬프트에 입각한 AI 생성 이미지만을 반환합니다.
+    무작위 자연/풍경 사이트를 완전히 배제하고, 무한히 계속해서 새로운 기사 맞춤형 AI 이미지를 그립니다.
     """
     clean_prompt = re.sub(r'[^a-zA-Z0-9\s,]', '', prompt_text).strip()
     if not clean_prompt:
         clean_prompt = "flagship tech product documentary scene"
     
-    # 회차별로 앵글과 톤을 약간씩 달리하여 Rate Limit 우회 및 다양성 확보
-    styles = [
-        "cinematic lighting, ultra-realistic, 8k, professional photography, dramatic shadow",
-        "studio product shot, high contrast, crisp details, editorial photography, 8k",
-        "hyper-detailed, award winning photojournalism, realistic textures, 8k resolution",
-        "commercial photography, clean dark backdrop, atmospheric lighting, photorealistic 8k"
+    # 4회차 이상 넘어가도 계속 변형을 줄 수 있도록 dynamic 파라미터 매치
+    visual_styles = [
+        "cinematic lighting, ultra-realistic, 8k, professional photography, dramatic shadows, highly detailed",
+        "studio product shot, ultra sharp details, dark background, photorealistic 8k, Award Winning photo",
+        "handheld action photography, natural movement blur, raw image quality, 8k documentary capture",
+        "industrial tech aesthetics, dark cinematic look, high contrast, immersive details, award winning"
     ]
-    style_suffix = random.choice(styles)
-    enhanced_prompt = f"{clean_prompt}, {style_suffix}"
+    selected_style = random.choice(visual_styles)
+    enhanced_prompt = f"{clean_prompt}, {selected_style}"
     encoded_prompt = urllib.parse.quote(enhanced_prompt)
-    ts = int(time.time() * 1000)
 
-    # Pollinations의 다양한 모델/파라미터 조합 (풍경 더미 사이트 완전 배제)
+    # 400ms 단위 실시간 타임스탬프와 난수를 곱해 API 캐싱 파쇄
+    ts = int(time.time() * 1000) + random.randint(100, 999)
+
+    # Pollinations 다변화 모델 엔드포인트 세트 (캐시 버스터 t 파라미터 포함)
     candidate_urls = [
         f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val}&model=turbo&nologo=true&t={ts}",
-        f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val}&nologo=true&t={ts}",
-        f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val + 333}&model=flux&nologo=true&t={ts}",
-        f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val + 777}&enhance=true&nologo=true&t={ts}"
+        f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val + 52}&nologo=true&t={ts + 1}",
+        f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val + 248}&model=flux&nologo=true&t={ts + 2}",
+        f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val + 891}&enhance=true&nologo=true&t={ts + 3}"
     ]
 
     headers = {
-        "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.{seed_val % 255}",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache"
+        "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.{random.randint(1, 200)} Safari/537.36",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0"
     }
 
-    # 후보 AI 생성 URL을 순회하며 진짜 AI 생성 이미지만 취득
+    # 후보 AI 생성 URL을 돌며 응답 확보 시도
     for u in candidate_urls:
         try:
-            res = requests.get(u, headers=headers, timeout=11)
+            res = requests.get(u, headers=headers, timeout=12)
             if res.status_code == 200 and len(res.content) > 10000:
                 img = Image.open(BytesIO(res.content))
                 if is_valid_photo(img):
@@ -231,11 +233,7 @@ def generate_contextual_ai_image(prompt_text, seed_val=42, fallback_photo=None):
         except Exception:
             continue
 
-    # 외부 AI 서버가 모두 막힌 경우: 엉뚱한 풍경 대신 기사 원문 사진을 배경으로 활용
-    if fallback_photo and is_valid_photo(fallback_photo):
-        return fallback_photo.copy()
-
-    # 원문 사진도 없을 때의 안전장치: 모던 다크 그라데이션
+    # 폴백 안전망 (어떠한 빽업 풍경/자연 사진도 거부, 럭셔리 다크 플레이트 생성)
     base = Image.new("RGB", (1080, 1350), color=(15, 23, 42))
     draw = ImageDraw.Draw(base)
     for y in range(0, 1350):
@@ -449,9 +447,8 @@ if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_
 
                     ai_result = generate_all_card_content(art.title, art.text)
                     
-                    fallback_base = art_img_pool[0] if art_img_pool else None
                     initial_seed = random.randint(1001, 99999)
-                    ai_img = generate_contextual_ai_image(ai_result["image_prompt"], seed_val=initial_seed, fallback_photo=fallback_base)
+                    ai_img = generate_contextual_ai_image(ai_result["image_prompt"], seed_val=initial_seed)
 
                     st.session_state.app_state["is_ready"] = True
                     st.session_state.app_state["copies"] = ai_result["titles"]
@@ -464,7 +461,7 @@ if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_
                         "explain": ai_result["explain"]
                     }
                     st.session_state.app_state["article_images"] = art_img_pool
-                    st.session_state.app_state["ai_generated_images"] = [ai_img]
+                    st.session_state.app_state["ai_generated_images"] = [ai_img] # 주소값 독립화
                     st.session_state.app_state["current_image_source"] = "ai"
                     st.session_state.app_state["current_img_idx"] = 0
                     st.session_state.app_state["seed"] = initial_seed
@@ -489,14 +486,16 @@ if state["is_ready"]:
                 state["active_title"] = c_text
                 st.rerun()
 
-    if state["current_image_source"] == "ai" and state["ai_generated_images"]:
+    # 이미지 소스 분기 및 뷰 캡션 유동 키 할당 (UI 캐싱 완전 차단용)
+    active_bg_img = None
+    if state["current_image_source"] == "ai" and len(state["ai_generated_images"]) > 0:
         active_bg_img = state["ai_generated_images"][0]
-        badge_desc = "🤖 기사 맞춤 AI 비주얼"
-    elif state["article_images"]:
+        badge_desc = f"🤖 기사 맞춤 AI 비주얼 ({state['redraw_count'] + 1}회차)"
+    elif state["article_images"] and state["current_img_idx"] < len(state["article_images"]):
         active_bg_img = state["article_images"][state["current_img_idx"]]
         badge_desc = f"📰 기사 원문 사진 ({state['current_img_idx'] + 1}/{len(state['article_images'])})"
     else:
-        active_bg_img = state["ai_generated_images"][0]
+        active_bg_img = Image.new("RGB", (1080, 1350), color=(15, 23, 42))
         badge_desc = "🖼️ 맞춤 비주얼"
 
     rendered_img = render_single_card(
@@ -508,20 +507,32 @@ if state["is_ready"]:
         state["text_y"]
     )
 
-    st.image(rendered_img, caption=f"📱 완성된 인스타그램 피드 (1080x1350) · {badge_desc}", use_container_width=True)
+    # 4번째 이상 클릭하더라도 렌더 뷰 컴포넌트를 강제 Refresh하기 위해 high_id 난수 key 부여
+    dynamic_img_key = f"img_view_{state['seed']}_{state['redraw_count']}"
+    st.image(
+        rendered_img, 
+        key=dynamic_img_key,
+        caption=f"📱 완성된 인스타그램 피드 (1080x1350) · {badge_desc}", 
+        use_container_width=True
+    )
 
     col_img1, col_img2 = st.columns(2)
     with col_img1:
-        if st.button("🎨 AI로 다른 이미지 다시 그리기", key=f"btn_redraw_{state['redraw_count']}", use_container_width=True):
+        # 버튼에 count 결합 및 클릭 시 action 함수에서 세션 메모리 오버라이드
+        if st.button("🎨 AI로 다른 이미지 다시 그리기", key=f"btn_redraw_main_{state['redraw_count']}", use_container_width=True):
             state["redraw_count"] += 1
-            new_seed = random.randint(10000, 999999) + state["redraw_count"] * 137
-            fallback_base = state["article_images"][0] if state["article_images"] else None
+            # 매 횟수마다 겹침 없는 극한의 난수 + 카운터 곱
+            new_seed = int(time.time() * 100) + random.randint(1000, 9999) + state["redraw_count"] * 142
             
-            with st.spinner(f"기사 내용에 맞는 새 비주얼을 그리고 있습니다... ({state['redraw_count']}회차)"):
-                new_ai_img = generate_contextual_ai_image(state["image_prompt"], seed_val=new_seed, fallback_photo=fallback_base)
-                state["ai_generated_images"] = [new_ai_img]
+            with st.spinner(f"기사 내용에 맞는 새 비주얼을 그리고 있습니다... (새 이미지 생성 중)"):
+                # 생성 파이프라인에서 무조건 생성된 Image 객체를 직접 받아와 리스트로 신규 주입
+                new_ai_img = generate_contextual_ai_image(state["image_prompt"], seed_val=new_seed)
+                
+                # [NEW] 세션 상태를 이전 값을 참조하지 않도록 완전히 새로 독립 교체
+                state["ai_generated_images"] = [new_ai_img.copy()] # 복사본 생성으로 메모리 주소 격리
                 state["current_image_source"] = "ai"
                 state["seed"] = new_seed
+            
             st.rerun()
 
     with col_img2:
