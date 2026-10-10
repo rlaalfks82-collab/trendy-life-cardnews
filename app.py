@@ -507,11 +507,10 @@ if state["is_ready"]:
         state["text_y"]
     )
 
-    # 4번째 이상 클릭하더라도 렌더 뷰 컴포넌트를 강제 Refresh하기 위해 high_id 난수 key 부여
-    dynamic_img_key = f"img_view_{state['seed']}_{state['redraw_count']}"
+    # [수정 완료] 예기치 못한 TypeError를 차단하기 위해 st.image()의 key 인자를 제거
+    # 대신 런타임에 rendered_img 객체 변경 및 badge_desc 캡션 갱신을 통해 UI가 안전하게 재조사되도록 세팅
     st.image(
         rendered_img, 
-        key=dynamic_img_key,
         caption=f"📱 완성된 인스타그램 피드 (1080x1350) · {badge_desc}", 
         use_container_width=True
     )
@@ -528,7 +527,7 @@ if state["is_ready"]:
                 # 생성 파이프라인에서 무조건 생성된 Image 객체를 직접 받아와 리스트로 신규 주입
                 new_ai_img = generate_contextual_ai_image(state["image_prompt"], seed_val=new_seed)
                 
-                # [NEW] 세션 상태를 이전 값을 참조하지 않도록 완전히 새로 독립 교체
+                # 세션 상태를 이전 값을 참조하지 않도록 완전히 새로 독립 교체
                 state["ai_generated_images"] = [new_ai_img.copy()] # 복사본 생성으로 메모리 주소 격리
                 state["current_image_source"] = "ai"
                 state["seed"] = new_seed
@@ -553,37 +552,4 @@ if state["is_ready"]:
                 st.rerun()
         with col_ed2:
             new_sub = st.text_area("본문 문구 수정", value=state["active_sub"], height=70)
-            if new_sub != state["active_sub"]:
-                state["active_sub"] = new_sub
-                st.rerun()
-
-        col_sl1, col_sl2, col_sl3 = st.columns(3)
-        with col_sl1:
-            state["title_size"] = st.slider("제목 글자 크기", 42, 64, state["title_size"], step=2)
-        with col_sl2:
-            state["content_size"] = st.slider("본문 글자 크기", 22, 34, state["content_size"], step=2)
-        with col_sl3:
-            state["text_y"] = st.slider("텍스트 높이 위치", 700, 1000, state["text_y"], step=10)
-
-    buf = BytesIO()
-    rendered_img.save(buf, format="PNG")
-    st.download_button(
-        label="📥 완성된 카드 이미지 저장하기 (1080x1350)",
-        data=buf.getvalue(),
-        file_name=f"instagram_feed_{datetime.now().strftime('%H%M%S')}.png",
-        mime="image/png",
-        use_container_width=True
-    )
-
-    st.write("---")
-
-    st.markdown("#### 📝 인스타그램 본문 캡션 선택 (기사 팩트 반영)")
-    tab_empathy, tab_vote, tab_explain = st.tabs(["❤️ 공감형", "🗳️ 투표형 (찬반)", "📑 정보 설명형 (요약)"])
-
-    caps = state["captions"]
-    with tab_empathy:
-        st.text_area("공감형 캡션 (복사해서 인스타에 붙여넣으세요)", value=caps.get("empathy", ""), height=170)
-    with tab_vote:
-        st.text_area("투표형 캡션 (댓글 토론 유도)", value=caps.get("vote", ""), height=170)
-    with tab_explain:
-        st.text_area("설명형 캡션 (핵심 요약 & 저장 유도)", value=caps.get("explain", ""), height=170)
+            if new_sub != state
