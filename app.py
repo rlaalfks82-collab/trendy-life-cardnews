@@ -63,7 +63,7 @@ def load_fonts(t_sz, c_sz):
     for f_path in font_candidates_bold:
         try:
             title_font = ImageFont.truetype(f_path, t_sz)
-            badge_font = ImageFont.truetype(f_path, 20)
+            badge_font = ImageFont.truetype(f_path, 22)
             break
         except Exception:
             continue
@@ -162,21 +162,16 @@ def download_image_pil(img_url):
     return None
 
 # =============================================
-# [개선] 기사 내용 100% 일치 AI 이미지 생성기
+# 기사 내용 100% 일치 AI 이미지 생성기
 # =============================================
 def generate_contextual_ai_image(prompt_text, seed_val=42, fallback_photo=None):
-    """
-    기사 주제(스마트폰, IT기기, 인물 등)에 정확히 부합하는 AI 이미지를 생성합니다.
-    """
     clean_prompt = re.sub(r'[^a-zA-Z0-9\s,]', '', prompt_text).strip()
     if not clean_prompt:
-        clean_prompt = "modern high tech flagship smartphone display close up realistic product shot"
+        clean_prompt = "modern high tech gadget product shot close up dark background"
     
-    # 테크/제품/상황 중심의 정밀 프롬프트
-    enhanced_prompt = f"{clean_prompt}, clean dark background, professional product photography, 8k, cinematic lighting"
+    enhanced_prompt = f"{clean_prompt}, clean dark studio background, professional product photography, 8k, dramatic lighting"
     encoded_prompt = urllib.parse.quote(enhanced_prompt)
 
-    # 1순위: Pollinations Flux/Turbo (기사 맥락 100% 반영 AI 생성)
     urls = [
         f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val}&model=turbo&nologo=true",
         f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val}&nologo=true"
@@ -193,11 +188,9 @@ def generate_contextual_ai_image(prompt_text, seed_val=42, fallback_photo=None):
         except Exception:
             continue
 
-    # 2순위: 기사 실제 사진이 있다면 엉뚱한 풍경 대신 실제 기사 사진 활용
     if fallback_photo and is_valid_photo(fallback_photo):
         return fallback_photo.copy()
 
-    # 3순위: 테크 IT 기기 기본 렌더링 캔버스
     base = Image.new("RGB", (1080, 1350), color=(15, 23, 42))
     draw = ImageDraw.Draw(base)
     for y in range(0, 1350):
@@ -275,7 +268,7 @@ def generate_all_card_content(title, text):
     raise Exception(f"AI 생성 실패: {last_err}")
 
 # =============================================
-# 단일 카드 렌더링 엔진 (옆으로 넘겨서 확인 문구 완전 제거)
+# 단일 카드 렌더링 엔진 (디자인 미감 & 뱃지 리파인)
 # =============================================
 def render_single_card(title_text, sub_text, base_img, title_size, content_size, text_y_pos):
     width, height = 1080, 1350
@@ -286,15 +279,17 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
     gradient = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     g_draw = ImageDraw.Draw(gradient)
 
-    for y in range(0, 160):
-        alpha = int((1.0 - (y / 160.0)) * 75)
+    # 상단 은은한 비네팅
+    for y in range(0, 180):
+        alpha = int((1.0 - (y / 180.0)) * 85)
         g_draw.line([(0, y), (width, y)], fill=(5, 8, 15, alpha))
 
-    start_g = int(text_y_pos - 120)
+    # 하단 텍스트 가독성을 위한 부드러운 다크 그라데이션
+    start_g = int(text_y_pos - 140)
     for y in range(start_g, height):
         if y < start_g + 260:
             progress = (y - start_g) / 260.0
-            alpha = int((progress ** 1.6) * 230)
+            alpha = int((progress ** 1.6) * 235)
         else:
             alpha = 248
         g_draw.line([(0, y), (width, y)], fill=(9, 13, 20, alpha))
@@ -302,12 +297,32 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
     card = Image.alpha_composite(base_img, gradient).convert("RGB")
     draw = ImageDraw.Draw(card)
 
-    tag_clean = "TREND ISSUE"
-    draw.rounded_rectangle([64, 64, 230, 110], radius=22, fill=(15, 23, 42, 220))
-    draw.rounded_rectangle([64, 64, 230, 110], radius=22, outline=(255, 255, 255, 70), width=1)
-    draw.ellipse([80, 82, 88, 90], fill=(250, 204, 21))
-    draw.text((98, 76), tag_clean, font=b_font, fill=(255, 255, 255))
+    # [디자인 미감 개선] 제공 이미지와 동일한 Pill 알약형 TREND ISSUE 뱃지
+    badge_x, badge_y = 64, 64
+    badge_w, badge_h = 216, 52
+    badge_radius = 26  # 완전한 라운드 알약 형태
 
+    # 뱃지 배경 및 섬세한 반투명 테두리
+    draw.rounded_rectangle(
+        [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
+        radius=badge_radius,
+        fill=(11, 19, 32)
+    )
+    draw.rounded_rectangle(
+        [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
+        radius=badge_radius,
+        outline=(255, 255, 255, 60),
+        width=1
+    )
+
+    # 뱃지 내부 옐로우 포인트 점 (제공 이미지 스타일)
+    dot_cx, dot_cy, dot_r = badge_x + 24, badge_y + 26, 4
+    draw.ellipse([dot_cx - dot_r, dot_cy - dot_r, dot_cx + dot_r, dot_cy + dot_r], fill=(250, 204, 21))
+
+    # 뱃지 영문 텍스트
+    draw.text((badge_x + 38, badge_y + 13), "TREND ISSUE", font=b_font, fill=(248, 250, 252))
+
+    # 제목 텍스트 (어절 줄바꿈)
     t_words = title_text.split()
     t_lines, curr = [], ""
     for w in t_words:
@@ -318,10 +333,11 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
             curr += w + " "
     if curr.strip(): t_lines.append(curr.strip())
 
+    # 본문 텍스트 (가독성 기준 20자 내외 줄바꿈)
     c_words = sub_text.split()
     c_lines, curr = [], ""
     for w in c_words:
-        if len(curr + w) > 22:
+        if len(curr + w) > 20:
             if curr.strip(): c_lines.append(curr.strip())
             curr = w + " "
         else:
@@ -329,24 +345,27 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
     if curr.strip(): c_lines.append(curr.strip())
 
     curr_y = text_y_pos
+    # 제목 상단 옐로우 악센트 미니바
     draw.rounded_rectangle([64, curr_y - 20, 114, curr_y - 13], radius=4, fill=(250, 204, 21))
 
+    # 제목 출력
     for l in t_lines:
         draw.text((64, curr_y), l, font=t_font, fill=(255, 255, 255))
         curr_y += title_size + 14
 
+    # 본문 출력 (30px 기준 적정 행간 적용)
     curr_y += 18
     for l in c_lines:
         draw.text((64, curr_y), l, font=c_font, fill=(226, 232, 240))
-        curr_y += content_size + 12
+        curr_y += content_size + 14
 
-    # 불필요한 '옆으로 넘겨서 확인' 문구 제거: 카드 하단 디바이더만 깔끔하게 유지
+    # 하단 엣지 라인
     draw.line([64, 1260, 1016, 1260], fill=(51, 65, 85, 140), width=2)
 
     return card
 
 # =============================================
-# 세션 상태 관리
+# 세션 상태 관리 (제공해주신 슬라이더 기본값 54, 30, 860 반영)
 # =============================================
 if "app_state" not in st.session_state:
     st.session_state.app_state = {
@@ -359,9 +378,9 @@ if "app_state" not in st.session_state:
         "ai_generated_images": [],
         "current_image_source": "ai",
         "current_img_idx": 0,
-        "title_size": 52,
-        "content_size": 26,
-        "text_y": 880,
+        "title_size": 54,      # 제공 이미지 기본값 세팅: 54
+        "content_size": 30,    # 제공 이미지 기본값 세팅: 30
+        "text_y": 860,         # 제공 이미지 기본값 세팅: 860
         "image_prompt": "modern smartphone gadget tech product shot",
         "seed": 42
     }
@@ -415,7 +434,6 @@ if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_
                     }
                     st.session_state.app_state["article_images"] = art_img_pool
                     st.session_state.app_state["ai_generated_images"] = [ai_img]
-                    # 기사 실제 스틸컷이 있으면 원문 사진을 기본값으로 두거나 AI 이미지를 배치
                     st.session_state.app_state["current_image_source"] = "ai"
                     st.session_state.app_state["current_img_idx"] = 0
                     st.session_state.app_state["seed"] = initial_seed
@@ -483,6 +501,7 @@ if state["is_ready"]:
         else:
             st.button("📰 기사 원문 사진 없음", disabled=True, use_container_width=True)
 
+    # 커스터마이징 패널 (기본값: 제목 54, 본문 30, 높이 860)
     with st.expander("🛠️ 문구 직접 수정 & 글자 크기/위치 조절 (커스터마이징)"):
         col_ed1, col_ed2 = st.columns(2)
         with col_ed1:
