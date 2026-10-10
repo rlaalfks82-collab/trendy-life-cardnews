@@ -2,8 +2,6 @@ import os
 import re
 import json
 import time
-import zipfile
-import urllib.parse
 from datetime import datetime
 from io import BytesIO
 import requests
@@ -15,11 +13,11 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageStat
 from pydantic import BaseModel
 from typing import List
 
-# 모바일 친화형 레이아웃 설정
-st.set_page_config(page_title="SNS 인스타 카드뉴스 자동생성기", page_icon="📱", layout="centered")
+# 모바일 단일 화면 뷰 설정
+st.set_page_config(page_title="SNS 인스타 카드뉴스 쾌속 생성기", page_icon="📱", layout="centered")
 
 # =============================================
-# 1. API 키 설정 (Secrets / 환경변수)
+# 1. API 키 설정 (Secrets 및 환경변수 지원)
 # =============================================
 api_key = os.environ.get("GEMINI_API_KEY")
 if not api_key and "GEMINI_API_KEY" in st.secrets:
@@ -91,7 +89,7 @@ def sanitize_korean_text(text):
     return text.strip()
 
 # =============================================
-# 스마트 프레이밍 (얼굴 보존 블러 레터박스)
+# 피사체 얼굴 절단 방지 프레이밍 엔진
 # =============================================
 def smart_fit_or_crop(base_img, target_w=1080, target_h=1350):
     base_img = base_img.convert("RGBA")
@@ -99,10 +97,12 @@ def smart_fit_or_crop(base_img, target_w=1080, target_h=1350):
     target_ratio = target_w / target_h
     src_ratio = src_w / src_h
 
+    # 가로가 긴 투샷/단체컷: 레터박스 블러 처리로 얼굴 보존
     if src_ratio > 1.15:
         bg_scale = max(target_w / src_w, target_h / src_h)
         bg_w, bg_h = int(src_w * bg_scale), int(src_h * bg_scale)
         bg = base_img.resize((bg_w, bg_h), Image.Resampling.LANCZOS)
+        
         left = (bg_w - target_w) // 2
         top = (bg_h - target_h) // 2
         bg = bg.crop((left, top, left + target_w, top + target_h)).filter(ImageFilter.GaussianBlur(35))
@@ -111,9 +111,13 @@ def smart_fit_or_crop(base_img, target_w=1080, target_h=1350):
         fit_scale = min(target_w / src_w, (target_h * 0.65) / src_h)
         fg_w, fg_h = int(src_w * fit_scale), int(src_h * fit_scale)
         fg = base_img.resize((fg_w, fg_h), Image.Resampling.LANCZOS)
-        bg.paste(fg, ((target_w - fg_w) // 2, 120), fg)
+
+        pos_x = (target_w - fg_w) // 2
+        pos_y = 120
+        bg.paste(fg, (pos_x, pos_y), fg)
         return bg
 
+    # 세로형 또는 정방형 사진
     if src_ratio > target_ratio:
         new_w = int(src_h * target_ratio)
         left_offset = int((src_w - new_w) * 0.45)
@@ -148,7 +152,7 @@ def download_image_pil(img_url):
     return None
 
 # =============================================
-# AI 카피라이팅 & 캡션 생성 (Gemini API / Fallback)
+# AI 후킹 카피 & 3종 캡션 생성 엔진
 # =============================================
 class HeadlineCandidates(BaseModel):
     titles: List[str]
@@ -173,15 +177,20 @@ def generate_ai_copies(title, text):
 
     prompt = f"""
     당신은 인스타그램 트렌드 뉴스 계정의 수석 카피라이터입니다.
-    영상 속 시청자의 시선을 사로잡는 강력한 후킹 제목 5가지를 추천해 주세요.
-    1. 타겟 지목형 ("내 얘기잖아?" 싶은 카피)
-    2. 금지/경고형 ("절대 ~하지 마세요" 식의 호기심 자극 카피)
-    3. 숫자와 구체성형 (숫자로 궁금증 극대화)
-    4. 스토리텔링형 (비하인드/반전 카피)
-    5. 공감 자극형 카피
+    기사 본문 내용을 정확하게 파악하고, 독자의 시선을 사로잡는 강력한 후킹 제목 5가지를 추천해 주세요.
+    1. 🎯 타겟 지목형 ("내 얘기잖아?" 싶은 카피)
+    2. 🚫 금지/경고형 ("절대 ~하지 마세요" 식의 호기심 자극 카피)
+    3. 🔢 숫자/구체성형 (숫자로 궁금증 극대화)
+    4. 📖 스토리텔링형 (비하인드/반전 카피)
+    5. ❤️ 공감 자극형 카피
+
+    [작성 규칙]:
+    - 기사 내용에 없는 허위 사실을 지어내지 마세요.
+    - 기자 이름, 날짜, 언론사명, 대괄호 []는 제목 본문 안에 절대 포함하지 마세요.
+    - 1줄당 14자~20자 내외로 화면에 깔끔하게 들어오도록 작성하세요.
 
     기사 제목: {clean_t}
-    기사 요약: {text[:1200]}
+    기사 본문 내용: {text[:1500]}
     """
     for model_name in FALLBACK_MODELS:
         try:
@@ -195,7 +204,9 @@ def generate_ai_copies(title, text):
                 )
             )
             data = json.loads(res.text)
-            return [sanitize_korean_text(t) for t in data.get("titles", [])][:5]
+            titles = [sanitize_korean_text(t) for t in data.get("titles", [])]
+            if len(titles) >= 3:
+                return titles[:5]
         except Exception:
             continue
 
@@ -217,13 +228,13 @@ def generate_captions(title, text):
         return {"empathy": empathy_fallback, "vote": vote_fallback, "explain": explain_fallback}
 
     prompt = f"""
-    당신은 인스타그램 전문 에디터입니다. 이 기사를 바탕으로 인스타그램 본문 캡션 3가지 유형을 작성하세요.
+    당신은 인스타그램 전문 에디터입니다. 기사 실제 내용을 바탕으로 인스타그램 본문 캡션 3가지 유형을 작성하세요.
     - empathy: 독자의 감정을 건드려 공감 댓글을 유도하는 공감형
     - vote: A vs B 양자택일 선택을 유도하여 댓글 반응을 폭발시키는 찬반 투표형
     - explain: 핵심 3줄 요약과 함께 저장을 유도하는 정보 설명형
 
     기사 제목: {clean_t}
-    기사 내용: {text[:1200]}
+    기사 내용: {text[:1500]}
     """
     for model_name in FALLBACK_MODELS:
         try:
@@ -243,7 +254,7 @@ def generate_captions(title, text):
     return {"empathy": empathy_fallback, "vote": vote_fallback, "explain": explain_fallback}
 
 # =============================================
-# 카드 렌더링 함수 (영상 속 1장 직관 뷰)
+# 단일 카드 렌더링 엔진 (영상 속 1080x1350 단일 뷰)
 # =============================================
 def render_single_card(title_text, sub_text, base_img, title_size, content_size, text_y_pos):
     width, height = 1080, 1350
@@ -272,7 +283,7 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
     card = Image.alpha_composite(base_img, gradient).convert("RGB")
     draw = ImageDraw.Draw(card)
 
-    # 3. 상단 뱃지
+    # 3. 상단 브랜드 뱃지
     tag_clean = "TREND ISSUE"
     draw.rounded_rectangle([64, 64, 230, 110], radius=22, fill=(15, 23, 42, 220))
     draw.rounded_rectangle([64, 64, 230, 110], radius=22, outline=(255, 255, 255, 70), width=1)
@@ -301,7 +312,6 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
     if curr.strip(): c_lines.append(curr.strip())
 
     curr_y = text_y_pos
-    # 포인트 바
     draw.rounded_rectangle([64, curr_y - 20, 114, curr_y - 13], radius=4, fill=(250, 204, 21))
 
     for l in t_lines:
@@ -320,7 +330,7 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
     return card
 
 # =============================================
-# 세션 상태 관리
+# 세션 상태 초기화
 # =============================================
 if "app_state" not in st.session_state:
     st.session_state.app_state = {
@@ -333,14 +343,14 @@ if "app_state" not in st.session_state:
         "current_img_idx": 0,
         "title_size": 52,
         "content_size": 26,
-        "text_y": 820
+        "text_y": 880
     }
 
 # =============================================
-# 📱 메인 UI (영상 속 단일 화면 레이아웃)
+# 📱 메인 UI (영상 속 모바일 직관 뷰)
 # =============================================
 st.markdown("<h2 style='text-align: center; margin-bottom: 5px;'>🚀 인스타 보너스·뉴스 카드뉴스 생성기</h2>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #64748B; margin-bottom: 25px;'>기사 링크만 넣으면 AI가 후킹 카피와 이미지를 1분 만에 완성합니다</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #64748B; margin-bottom: 25px;'>기사 링크만 넣으면 실제 본문과 스틸컷으로 1분 만에 완성합니다</p>", unsafe_allow_html=True)
 
 # 1. URL 입력 및 원클릭 만들기 버튼
 news_url = st.text_input("🔗 뉴스 기사 링크 입력", placeholder="네이버/다음 등 포털 뉴스 기사 링크를 붙여넣으세요")
@@ -349,13 +359,13 @@ if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_
     if not news_url.strip():
         st.warning("뉴스 링크를 입력해 주세요.")
     else:
-        with st.spinner("기사를 읽고 눈길을 끄는 제목과 이미지를 생성하고 있습니다..."):
+        with st.spinner("기사 본문과 스틸컷을 정확하게 수집하고 있습니다..."):
             try:
                 art = Article(news_url, language='ko')
                 art.download()
                 art.parse()
 
-                # 이미지 수집
+                # 실제 기사 스틸컷 수집
                 img_pool = []
                 if art.top_image:
                     top_img = download_image_pil(art.top_image)
@@ -368,11 +378,11 @@ if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_
                 if not img_pool:
                     img_pool = [Image.new("RGB", (1080, 1350), color=(15, 23, 42))]
 
-                # AI 카피 및 캡션 생성
+                # 실제 기사 본문 기반 AI 카피 및 캡션 생성
                 copies = generate_ai_copies(art.title, art.text)
                 captions = generate_captions(art.title, art.text)
 
-                # 첫 문단 서브카피
+                # 첫 문단 서브카피 (완결 문장)
                 first_lines = [sanitize_korean_text(s) for s in re.split(r'(?<=[.?!])\s+', art.text) if len(s) > 20]
                 sub_copy = first_lines[0] if first_lines else "지금 가장 뜨거운 화제의 사건! 상세한 내막과 핵심 관전 포인트를 피드에서 확인하세요."
 
@@ -385,7 +395,7 @@ if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_
                 st.session_state.app_state["current_img_idx"] = 0
 
             except Exception as e:
-                st.error(f"생성 실패: {e}")
+                st.error(f"기사 분석 실패: {e}")
 
 # =============================================
 # 2. 결과 생성 완료 시: 영상 속 실시간 인터랙션 화면
@@ -437,7 +447,7 @@ if state["is_ready"]:
         with col_sl2:
             state["content_size"] = st.slider("본문 글자 크기", 22, 34, state["content_size"], step=2)
         with col_sl3:
-            state["text_y"] = st.slider("텍스트 높이 위치", 680, 920, state["text_y"], step=10)
+            state["text_y"] = st.slider("텍스트 높이 위치", 700, 1000, state["text_y"], step=10)
 
         # 이미지 변경 (다시 그리기 / 다른 스틸컷 전환)
         if len(state["images"]) > 1:
