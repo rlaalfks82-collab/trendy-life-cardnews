@@ -19,19 +19,18 @@ from typing import List
 st.set_page_config(page_title="SNS 인스타 카드뉴스 쾌속 생성기", page_icon="📱", layout="centered")
 
 # =============================================
-# 1. API 키 설정 (보안 차단 방지: 하드코딩 제거 및 Secrets/직접입력 지원)
+# 1. API 키 설정 (Secrets 및 상단 직접 입력 지원)
 # =============================================
 api_key = os.environ.get("GEMINI_API_KEY")
 if not api_key and "GEMINI_API_KEY" in st.secrets:
     api_key = st.secrets["GEMINI_API_KEY"]
 
-# 상단 접이식 패널을 통한 안전한 API 키 수동 입력 지원
-with st.expander("🔑 Gemini API 키 설정 (필요 시 입력)"):
+with st.expander("🔑 Gemini API 키 설정 (필요 시 확인/입력)"):
     user_key_input = st.text_input(
         "API Key",
         value=api_key if api_key else "",
         type="password",
-        placeholder="발급받은 Gemini API 키를 여기에 입력하세요"
+        placeholder="Gemini API 키를 여기에 입력하세요"
     )
     if user_key_input.strip():
         api_key = user_key_input.strip()
@@ -82,7 +81,7 @@ def load_fonts(t_sz, c_sz):
     return title_font, content_font, badge_font
 
 # =============================================
-# 텍스트 노이즈 정제기
+# 텍스트 정제기
 # =============================================
 def sanitize_korean_text(text):
     if not text:
@@ -187,81 +186,39 @@ def generate_ai_custom_image(prompt_text, seed_val=42):
     return Image.new("RGB", (1080, 1350), color=(15, 23, 42))
 
 # =============================================
-# Pydantic 모델
+# 통합 Pydantic 모델 & 1회 통합 호출 엔진
 # =============================================
-class HeadlineCandidates(BaseModel):
+class UnifiedCardNewsResponse(BaseModel):
     titles: List[str]
-
-class ContentSummaryResponse(BaseModel):
     card_subcopy: str
     image_prompt: str
     empathy: str
     vote: str
     explain: str
 
-PRIMARY_MODELS = ["gemini-3.8-flash"]
+# 넉넉한 쿼터의 flash-lite를 1순위로 배치
+PRIMARY_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
 
-# =============================================
-# AI 후킹 카피 & 실제 팩트 기반 요약 엔진
-# =============================================
-def generate_ai_copies(title, text):
+def generate_all_card_content(title, text):
     clean_t = sanitize_korean_text(title)
     if not client:
         raise Exception("Gemini API Key가 설정되지 않았습니다. 상단 API Key 설정창에 키를 입력해 주세요.")
 
     prompt = f"""
-    당신은 SNS 시사/트렌드 뉴스 에디터입니다. 아래 제공된 기사의 실제 분야(정치, 사회, 경제, 연예 등)의 사건 본질에 맞추어 스크롤을 멈추게 하는 헤드라인 5개를 작성하세요.
+    당신은 SNS 시사/트렌드 뉴스 전문 에디터입니다.
+    아래 기사의 실제 분야(정치, 사회, 경제, IT, 연예 등)의 사건 팩트에 정확히 부합하는 콘텐츠 세트를 작성하세요.
 
-    [작성 규칙]:
-    - 기사의 실제 주제와 전혀 무관한 엉뚱한 연예/드라마 멘트를 절대 사용하지 마세요.
-    - 기자명, 날짜, 언론사명, [ ] 대괄호는 제목에 포함하지 마세요.
-    - 1줄당 14자~20자 내외로 명확하고 강렬하게 작성하세요.
-
-    기사 제목: {clean_t}
-    기사 본문:
-    {text[:1800]}
-    """
-
-    last_err = None
-    for m in PRIMARY_MODELS:
-        try:
-            res = client.models.generate_content(
-                model=m,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=HeadlineCandidates,
-                    temperature=0.7
-                )
-            )
-            data = json.loads(res.text)
-            titles = [sanitize_korean_text(t) for t in data.get("titles", [])]
-            if titles:
-                return titles[:5]
-        except Exception as e:
-            last_err = e
-            continue
-
-    raise Exception(f"AI 제목 생성 실패: {last_err}")
-
-def generate_news_content(title, text):
-    clean_t = sanitize_korean_text(title)
-    if not client:
-        raise Exception("Gemini API Key가 설정되지 않았습니다. 상단 API Key 설정창에 키를 입력해 주세요.")
-
-    prompt = f"""
-    당신은 전문 뉴스 에디터입니다. 아래 기사의 실제 팩트만을 바탕으로 카드 본문 요약과 인스타그램 3종 캡션을 작성하세요.
-
-    [작성 기준]:
-    1. card_subcopy: 피드 1장에 들어갈 본문 요약 (70~90자).
-       - 기사 속 '핵심 사건/주장/쟁점'을 1~2개 완결된 문장으로 서술. 기사 내용과 무관한 엉뚱한 미사여구 절대 금지.
-    2. image_prompt: 기사 주제에 어울리는 현실적인 시네마틱 배경 영문 프롬프트 (예: 정치/외교면 'serious diplomatic summit press room documentary cinematic lighting').
-    3. empathy (공감형): 기사의 실제 팩트를 2~3줄로 설명한 뒤 의견을 나누는 캡션.
-    4. vote (투표형): 기사의 쟁점을 바탕으로 한 찬반(A vs B) 투표 캡션.
-    5. explain (설명형): 기사의 핵심 팩트 3줄 요약 캡션.
+    [필수 작성 규칙]:
+    1. titles: 독자의 스크롤을 멈추게 하는 강력한 후킹 제목 5개 (1줄당 14~20자 내외, 기사 주제와 무관한 엉뚱한 연예/드라마 말투 절대 금지, 대괄호 [] 제외).
+    2. card_subcopy: 피드 1장 카드에 들어갈 본문 요약 (70~90자).
+       - 기사의 '핵심 사건/주장/쟁점'을 1~2개 완결된 문장으로 서술. 기사 내용과 무관한 미사여구 금지.
+    3. image_prompt: 이 기사 주제에 어울리는 고화질 시네마틱 배경 영문 프롬프트 (예: 'serious diplomatic summit press room documentary cinematic lighting').
+    4. empathy: 기사의 실제 팩트를 2~3줄로 설명하고 의견을 나누는 공감형 인스타 본문.
+    5. vote: 기사의 쟁점을 바탕으로 한 찬반(A vs B) 투표형 인스타 본문.
+    6. explain: 기사의 핵심 팩트 3줄 요약 인스타 본문.
 
     기사 제목: {clean_t}
-    기사 본문:
+    기사 본문 내용:
     {text[:2000]}
     """
 
@@ -273,12 +230,13 @@ def generate_news_content(title, text):
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    response_schema=ContentSummaryResponse,
-                    temperature=0.5
+                    response_schema=UnifiedCardNewsResponse,
+                    temperature=0.7
                 )
             )
             data = json.loads(res.text)
             return {
+                "titles": [sanitize_korean_text(t) for t in data.get("titles", [])][:5],
                 "card_subcopy": sanitize_korean_text(data.get("card_subcopy", "")),
                 "image_prompt": data.get("image_prompt", "editorial news documentary background"),
                 "empathy": data.get("empathy", ""),
@@ -289,7 +247,7 @@ def generate_news_content(title, text):
             last_err = e
             continue
 
-    raise Exception(f"AI 본문 분석 실패: {last_err}")
+    raise Exception(f"AI 생성 실패: {last_err}")
 
 # =============================================
 # 단일 카드 렌더링 엔진 (인스타그램 공식 규격: 1080x1350)
@@ -416,19 +374,19 @@ if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_
                     if not art_img_pool:
                         art_img_pool = [Image.new("RGB", (1080, 1350), color=(15, 23, 42))]
 
-                    copies = generate_ai_copies(art.title, art.text)
-                    content_res = generate_news_content(art.title, art.text)
-                    ai_img = generate_ai_custom_image(content_res["image_prompt"], seed_val=int(time.time()) % 1000)
+                    # 1회 통합 호출로 쿼터 소모 50% 절감
+                    ai_result = generate_all_card_content(art.title, art.text)
+                    ai_img = generate_ai_custom_image(ai_result["image_prompt"], seed_val=int(time.time()) % 1000)
 
                     st.session_state.app_state["is_ready"] = True
-                    st.session_state.app_state["copies"] = copies
-                    st.session_state.app_state["active_title"] = copies[0]
-                    st.session_state.app_state["active_sub"] = content_res["card_subcopy"]
-                    st.session_state.app_state["image_prompt"] = content_res["image_prompt"]
+                    st.session_state.app_state["copies"] = ai_result["titles"]
+                    st.session_state.app_state["active_title"] = ai_result["titles"][0]
+                    st.session_state.app_state["active_sub"] = ai_result["card_subcopy"]
+                    st.session_state.app_state["image_prompt"] = ai_result["image_prompt"]
                     st.session_state.app_state["captions"] = {
-                        "empathy": content_res["empathy"],
-                        "vote": content_res["vote"],
-                        "explain": content_res["explain"]
+                        "empathy": ai_result["empathy"],
+                        "vote": ai_result["vote"],
+                        "explain": ai_result["explain"]
                     }
                     st.session_state.app_state["article_images"] = art_img_pool
                     st.session_state.app_state["ai_generated_images"] = [ai_img]
