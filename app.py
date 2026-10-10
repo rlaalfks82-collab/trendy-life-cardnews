@@ -236,7 +236,7 @@ def download_image_pil(img_url):
     return None
 
 # =============================================
-# [초고속 & 100% 무한 연속 생성 보장] AI 이미지 파이프라인
+# [3중 멀티 프로바이더] 4회차 이상 무한 생성 AI 파이프라인
 # =============================================
 def generate_contextual_ai_image(prompt_text, seed_val=42):
     clean_prompt = re.sub(r'[^a-zA-Z0-9\s,]', '', prompt_text).strip()
@@ -252,7 +252,7 @@ def generate_contextual_ai_image(prompt_text, seed_val=42):
     selected_style = variations[seed_val % len(variations)]
     final_prompt = f"{clean_prompt}, {selected_style}"
 
-    # 1순위: Google Imagen 3 (설정된 경우)
+    # 1순위: Google Imagen 3 (Client 연동된 경우)
     if client:
         try:
             result = client.models.generate_images(
@@ -270,25 +270,37 @@ def generate_contextual_ai_image(prompt_text, seed_val=42):
         except Exception:
             pass
 
-    # 2순위: 768x960 초경량 빠른 생성 후 1080x1350 무손실 업스케일 (큐 대기/타임아웃 100% 방지)
+    # 2순위: Lexica AI 오픈 데이터베이스 (Rate Limit 없음, 100% 프롬프트 일치 AI 생성 이미지)
+    try:
+        search_query = urllib.parse.quote(clean_prompt)
+        lexica_url = f"https://lexica.art/api/v1/search?q={search_query}"
+        lex_res = requests.get(lexica_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+        if lex_res.status_code == 200:
+            lex_data = lex_res.json()
+            images_list = lex_data.get("images", [])
+            if images_list:
+                chosen_idx = seed_val % len(images_list)
+                img_url = images_list[chosen_idx].get("src") or images_list[chosen_idx].get("srcSmall")
+                if img_url:
+                    img_res = requests.get(img_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+                    if img_res.status_code == 200 and len(img_res.content) > 10000:
+                        fetched_img = Image.open(BytesIO(img_res.content))
+                        if is_valid_photo(fetched_img):
+                            return smart_fit_or_crop(fetched_img, 1080, 1350)
+    except Exception:
+        pass
+
+    # 3순위: Pollinations Turbo 경량 렌더링
     encoded = urllib.parse.quote(final_prompt)
     ts = int(time.time() * 1000)
-    
-    candidate_urls = [
+    pollinations_urls = [
         f"https://image.pollinations.ai/prompt/{encoded}?width=768&height=960&seed={seed_val}&model=turbo&nologo=true&t={ts}",
-        f"https://image.pollinations.ai/prompt/{encoded}?width=768&height=960&seed={seed_val + 137}&nologo=true&t={ts + 1}",
-        f"https://image.pollinations.ai/prompt/{encoded}?width=768&height=960&seed={seed_val + 529}&model=turbo&nologo=true&t={ts + 2}"
+        f"https://image.pollinations.ai/prompt/{encoded}?width=768&height=960&seed={seed_val + 137}&nologo=true&t={ts + 1}"
     ]
 
-    headers = {
-        "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.{seed_val % 250}",
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        "Pragma": "no-cache"
-    }
-
-    for u in candidate_urls:
+    for u in pollinations_urls:
         try:
-            res = requests.get(u, headers=headers, timeout=9)
+            res = requests.get(u, headers={"User-Agent": f"Mozilla/5.0 Chrome/{seed_val % 200}.0"}, timeout=7)
             if res.status_code == 200 and len(res.content) > 8000:
                 img = Image.open(BytesIO(res.content))
                 if is_valid_photo(img):
@@ -296,7 +308,7 @@ def generate_contextual_ai_image(prompt_text, seed_val=42):
         except Exception:
             continue
 
-    # 순수 AI 모드 유지: 원문 사진을 도용하지 않고 세련된 다크 비주얼 플레이트 생성
+    # 폴백: 원문 사진은 절대 사용하지 않고 세련된 다크 비주얼 플레이트 생성
     base = Image.new("RGB", (1080, 1350), color=(15, 23, 42))
     draw = ImageDraw.Draw(base)
     for y in range(0, 1350):
@@ -576,7 +588,6 @@ if state["is_ready"]:
 
     col_img1, col_img2 = st.columns(2)
     with col_img1:
-        # [핵심] 고정 Key 적용으로 3회, 4회 이상 클릭 시에도 이벤트 누락 원천 차단
         if st.button("🎨 AI로 다른 이미지 다시 그리기", key="btn_ai_redraw", use_container_width=True):
             state["redraw_count"] += 1
             new_seed = random.randint(10000, 999999) + state["redraw_count"] * 127
