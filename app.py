@@ -89,7 +89,7 @@ def sanitize_korean_text(text):
     return text.strip()
 
 # =============================================
-# 피사체 얼굴 절단 방지 프레이밍 엔진
+# 피사체 얼굴 절단 방지 프레이밍 엔진 (1080x1350)
 # =============================================
 def smart_fit_or_crop(base_img, target_w=1080, target_h=1350):
     base_img = base_img.convert("RGBA")
@@ -97,7 +97,7 @@ def smart_fit_or_crop(base_img, target_w=1080, target_h=1350):
     target_ratio = target_w / target_h
     src_ratio = src_w / src_h
 
-    # 가로가 긴 투샷/단체컷: 레터박스 블러 처리로 얼굴 보존
+    # 가로가 긴 사진(투샷, 단체컷): 블러 레터박스로 인물 절단 방지
     if src_ratio > 1.15:
         bg_scale = max(target_w / src_w, target_h / src_h)
         bg_w, bg_h = int(src_w * bg_scale), int(src_h * bg_scale)
@@ -152,12 +152,13 @@ def download_image_pil(img_url):
     return None
 
 # =============================================
-# AI 후킹 카피 & 3종 캡션 생성 엔진
+# AI 후킹 카피 & 팩트 기반 3종 캡션 엔진
 # =============================================
 class HeadlineCandidates(BaseModel):
     titles: List[str]
 
-class CaptionGroup(BaseModel):
+class ContentSummaryResponse(BaseModel):
+    card_subcopy: str
     empathy: str
     vote: str
     explain: str
@@ -172,7 +173,7 @@ def generate_ai_copies(title, text):
             f"절대 '{clean_t[:16]}' 그냥 넘기지 마세요",
             f"단 1회 만에 난리 난 '{clean_t[:14]}' 핵심",
             f"관계자가 밝힌 '{clean_t[:14]}' 결정적 비하인드",
-            f"실시간 검색어 1위 오른 '{clean_t[:14]}' 총정리"
+            f"실시간 화제 모은 '{clean_t[:14]}' 총정리"
         ]
 
     prompt = f"""
@@ -215,27 +216,71 @@ def generate_ai_copies(title, text):
         f"절대 '{clean_t[:16]}' 그냥 넘기지 마세요",
         f"단 1회 만에 난리 난 '{clean_t[:14]}' 핵심",
         f"관계자가 밝힌 '{clean_t[:14]}' 결정적 비하인드",
-        f"실시간 검색어 1위 오른 '{clean_t[:14]}' 총정리"
+        f"실시간 화제 모은 '{clean_t[:14]}' 총정리"
     ]
 
-def generate_captions(title, text):
+def generate_news_content(title, text):
     clean_t = sanitize_korean_text(title)
-    empathy_fallback = f"🔥 {clean_t}\n\n오늘 이 소식 보면서 마음 한구석이 찌릿하셨던 분들 많으시죠? 저 역시 이번 소식을 보며 깊은 인상을 받았습니다.\n\n여러분의 오늘 하루는 어떠셨나요? 공감되셨다면 댓글로 이야기 들려주세요 ❤️\n\n#이슈 #공감 #뉴스 #트렌드"
-    vote_fallback = f"🔥 {clean_t}\n\n지금 온라인에서 가장 뜨겁게 찬반이 갈리는 주제입니다.\n\n👉 A. 완벽히 통쾌하고 사이다다\n👉 B. 아직은 조금 더 지켜봐야 한다\n\n여러분의 솔직한 생각은 어느 쪽인가요? 댓글로 A 또는 B를 남겨주세요! 👇\n\n#투표 #토론 #이슈 #인스타"
-    explain_fallback = f"📌 {clean_t} 핵심 3줄 요약\n\n1. 화제의 핵심 이슈와 배경 전격 공개\n2. 놓치면 아쉬운 핵심 관전 포인트\n3. 앞으로 이어질 새로운 전개와 파장\n\n도움이 되셨다면 나중에 다시 보실 수 있게 [저장]해 두세요 🔖\n\n#정보 #뉴스 #요약 #트렌드"
+    
+    # AI 장애 시 팩트 기반 로컬 백업
+    raw_sentences = [sanitize_korean_text(s) for s in re.split(r'(?<=[.?!])\s+', text)]
+    valid_sentences = [
+        s for s in raw_sentences 
+        if len(s) >= 25 and not any(kw in s for kw in ["기자", "스튜디오", "연출", "극본", "배급", "사진="])
+    ]
+    fact_1 = valid_sentences[0] if len(valid_sentences) > 0 else f"{clean_t} 관련 소식이 전해졌습니다."
+    fact_2 = valid_sentences[1] if len(valid_sentences) > 1 else "핵심 내용과 쟁점에 관심이 집중되고 있습니다."
+    fact_3 = valid_sentences[2] if len(valid_sentences) > 2 else "이후 전개와 여론 반응에 이목이 쏠립니다."
+
+    fallback_result = {
+        "card_subcopy": f"{fact_1} {fact_2}"[:95],
+        "empathy": (
+            f"🔥 {clean_t}\n\n"
+            f"📌 핵심 사건 요약\n"
+            f"- {fact_1}\n"
+            f"- {fact_2}\n\n"
+            f"이 소식 접하고 마음 한구석이 찌릿하셨던 분들 많으시죠? 저 역시 깊은 인상을 받았습니다.\n"
+            f"여러분의 생각은 어떠신가요? 댓글로 이야기 들려주세요 ❤️\n\n"
+            f"#뉴스 #이슈 #트렌드"
+        ),
+        "vote": (
+            f"🔥 {clean_t}\n\n"
+            f"📌 핵심 쟁점 브리핑\n"
+            f"• 상황: {fact_1}\n"
+            f"• 대립 포인트: {fact_2}\n\n"
+            f"지금 온라인에서도 의견이 크게 엇갈리고 있습니다.\n\n"
+            f"👉 A. 충분히 납득되고 사이다다\n"
+            f"👉 B. 조금 더 신중하게 지켜봐야 한다\n\n"
+            f"여러분의 솔직한 생각은? 댓글로 A 또는 B를 남겨주세요! 👇\n\n"
+            f"#토론 #투표 #이슈"
+        ),
+        "explain": (
+            f"📌 {clean_t} 핵심 3줄 정리\n\n"
+            f"1️⃣ {fact_1}\n"
+            f"2️⃣ {fact_2}\n"
+            f"3️⃣ {fact_3}\n\n"
+            f"놓치지 않도록 나중에 볼 수 있게 [저장]해 두세요 🔖\n\n"
+            f"#정보요약 #뉴스정리 #트렌드이슈"
+        )
+    }
 
     if not client:
-        return {"empathy": empathy_fallback, "vote": vote_fallback, "explain": explain_fallback}
+        return fallback_result
 
     prompt = f"""
-    당신은 인스타그램 전문 에디터입니다. 기사 실제 내용을 바탕으로 인스타그램 본문 캡션 3가지 유형을 작성하세요.
-    - empathy: 독자의 감정을 건드려 공감 댓글을 유도하는 공감형
-    - vote: A vs B 양자택일 선택을 유도하여 댓글 반응을 폭발시키는 찬반 투표형
-    - explain: 핵심 3줄 요약과 함께 저장을 유도하는 정보 설명형
+    당신은 인스타그램 전문 에디터입니다. 아래 기사 본문의 '구체적인 팩트와 정보'를 정확히 요약하여 다음 4가지 요소를 작성하세요.
+    - 기자명, 날짜, 언론사명 같은 불필요한 메타데이터는 제외하고 순수 사건/콘텐츠 팩트만 담으세요.
+
+    1. card_subcopy: 피드 카드 1장에 들어갈 핵심 본문 요약 (마침표로 끝나는 완결된 1~2개 문장, 70~90자 내외).
+    2. empathy (공감형): 기사의 핵심 상황/팩트를 먼저 명확히 2~3줄로 설명한 뒤, 독자의 감정을 건드려 공감 댓글을 유도.
+    3. vote (투표형): 기사의 핵심 쟁점과 대립 상황을 팩트 기반으로 정리한 뒤, 'A vs B' 양자택일 질문 제시.
+    4. explain (설명형): 기사 내용을 바탕으로 1, 2, 3번으로 나눈 핵심 요약 브리핑 및 저장 유도.
 
     기사 제목: {clean_t}
-    기사 내용: {text[:1500]}
+    기사 본문 내용:
+    {text[:1500]}
     """
+
     for model_name in FALLBACK_MODELS:
         try:
             res = client.models.generate_content(
@@ -243,18 +288,24 @@ def generate_captions(title, text):
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    response_schema=CaptionGroup,
-                    temperature=0.7
+                    response_schema=ContentSummaryResponse,
+                    temperature=0.5
                 )
             )
-            return json.loads(res.text)
+            data = json.loads(res.text)
+            return {
+                "card_subcopy": sanitize_korean_text(data.get("card_subcopy", fallback_result["card_subcopy"])),
+                "empathy": data.get("empathy", fallback_result["empathy"]),
+                "vote": data.get("vote", fallback_result["vote"]),
+                "explain": data.get("explain", fallback_result["explain"])
+            }
         except Exception:
             continue
 
-    return {"empathy": empathy_fallback, "vote": vote_fallback, "explain": explain_fallback}
+    return fallback_result
 
 # =============================================
-# 단일 카드 렌더링 엔진 (영상 속 1080x1350 단일 뷰)
+# 단일 카드 렌더링 엔진 (인스타그램 공식 규격: 1080x1350)
 # =============================================
 def render_single_card(title_text, sub_text, base_img, title_size, content_size, text_y_pos):
     width, height = 1080, 1350
@@ -330,7 +381,7 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
     return card
 
 # =============================================
-# 세션 상태 초기화
+# 세션 상태 관리
 # =============================================
 if "app_state" not in st.session_state:
     st.session_state.app_state = {
@@ -347,10 +398,10 @@ if "app_state" not in st.session_state:
     }
 
 # =============================================
-# 📱 메인 UI (영상 속 모바일 직관 뷰)
+# 📱 메인 화면 UI
 # =============================================
 st.markdown("<h2 style='text-align: center; margin-bottom: 5px;'>🚀 인스타 보너스·뉴스 카드뉴스 생성기</h2>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #64748B; margin-bottom: 25px;'>기사 링크만 넣으면 실제 본문과 스틸컷으로 1분 만에 완성합니다</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #64748B; margin-bottom: 25px;'>기사 링크만 넣으면 팩트 요약과 최적화 스틸컷으로 1분 만에 완성합니다</p>", unsafe_allow_html=True)
 
 # 1. URL 입력 및 원클릭 만들기 버튼
 news_url = st.text_input("🔗 뉴스 기사 링크 입력", placeholder="네이버/다음 등 포털 뉴스 기사 링크를 붙여넣으세요")
@@ -359,7 +410,7 @@ if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_
     if not news_url.strip():
         st.warning("뉴스 링크를 입력해 주세요.")
     else:
-        with st.spinner("기사 본문과 스틸컷을 정확하게 수집하고 있습니다..."):
+        with st.spinner("기사 본문 팩트와 스틸컷을 정확하게 분석하고 있습니다..."):
             try:
                 art = Article(news_url, language='ko')
                 art.download()
@@ -378,19 +429,21 @@ if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_
                 if not img_pool:
                     img_pool = [Image.new("RGB", (1080, 1350), color=(15, 23, 42))]
 
-                # 실제 기사 본문 기반 AI 카피 및 캡션 생성
+                # 4대 후킹 카피 5종 생성
                 copies = generate_ai_copies(art.title, art.text)
-                captions = generate_captions(art.title, art.text)
 
-                # 첫 문단 서브카피 (완결 문장)
-                first_lines = [sanitize_korean_text(s) for s in re.split(r'(?<=[.?!])\s+', art.text) if len(s) > 20]
-                sub_copy = first_lines[0] if first_lines else "지금 가장 뜨거운 화제의 사건! 상세한 내막과 핵심 관전 포인트를 피드에서 확인하세요."
+                # 팩트 기반 카드 본문 요약 & 3종 캡션 일괄 생성
+                content_res = generate_news_content(art.title, art.text)
 
                 st.session_state.app_state["is_ready"] = True
                 st.session_state.app_state["copies"] = copies
                 st.session_state.app_state["active_title"] = copies[0]
-                st.session_state.app_state["active_sub"] = sub_copy
-                st.session_state.app_state["captions"] = captions
+                st.session_state.app_state["active_sub"] = content_res["card_subcopy"]
+                st.session_state.app_state["captions"] = {
+                    "empathy": content_res["empathy"],
+                    "vote": content_res["vote"],
+                    "explain": content_res["explain"]
+                }
                 st.session_state.app_state["images"] = img_pool
                 st.session_state.app_state["current_img_idx"] = 0
 
@@ -398,14 +451,14 @@ if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_
                 st.error(f"기사 분석 실패: {e}")
 
 # =============================================
-# 2. 결과 생성 완료 시: 영상 속 실시간 인터랙션 화면
+# 2. 결과 생성 완료 시: 실시간 인터랙션 화면
 # =============================================
 state = st.session_state.app_state
 
 if state["is_ready"]:
     st.write("---")
 
-    # 1) AI 추천 카피 선택 (클릭 시 즉시 실시간 반영)
+    # 1) AI 추천 카피 선택 (터치 시 0초 즉시 반영)
     st.markdown("#### 💡 AI 추천 후킹 카피 (클릭 시 즉시 변경)")
     cols_btn = st.columns(len(state["copies"]))
     for idx, c_text in enumerate(state["copies"]):
@@ -414,7 +467,7 @@ if state["is_ready"]:
                 state["active_title"] = c_text
                 st.rerun()
 
-    # 2) 카드 실시간 미리보기
+    # 2) 카드 실시간 미리보기 (1080x1350)
     current_img = state["images"][state["current_img_idx"]]
     rendered_img = render_single_card(
         state["active_title"],
@@ -425,9 +478,9 @@ if state["is_ready"]:
         state["text_y"]
     )
 
-    st.image(rendered_img, caption="📱 완성된 인스타그램 피드 (1080x1350)", use_container_width=True)
+    st.image(rendered_img, caption="📱 완성된 인스타그램 피드 (1080x1350 / 4:5 규격)", use_container_width=True)
 
-    # 3) 인터랙티브 커스터마이징 도구 (문구 직접 수정 / 글자 크기 / 위치 조절 / 이미지 교체)
+    # 3) 실시간 조절 패널 (문구 수정 / 슬라이더 조절 / 스틸컷 변경)
     with st.expander("🛠️ 문구 직접 수정 & 글자 크기/위치 조절 (커스터마이징)"):
         col_ed1, col_ed2 = st.columns(2)
         with col_ed1:
@@ -449,7 +502,6 @@ if state["is_ready"]:
         with col_sl3:
             state["text_y"] = st.slider("텍스트 높이 위치", 700, 1000, state["text_y"], step=10)
 
-        # 이미지 변경 (다시 그리기 / 다른 스틸컷 전환)
         if len(state["images"]) > 1:
             if st.button("🔄 다른 기사 사진으로 교체 (다시 그리기)", use_container_width=True):
                 state["current_img_idx"] = (state["current_img_idx"] + 1) % len(state["images"])
@@ -459,8 +511,8 @@ if state["is_ready"]:
     buf = BytesIO()
     rendered_img.save(buf, format="PNG")
     st.download_button(
-        label="📥 완성된 카드 이미지 저장하기",
-        data=buf.getvalue(),
+        label="📥 완성된 카드 이미지 저장하기 (1080x1350)",
+        data=buf.getvalue>,
         file_name=f"instagram_feed_{datetime.now().strftime('%H%M%S')}.png",
         mime="image/png",
         use_container_width=True
@@ -468,14 +520,14 @@ if state["is_ready"]:
 
     st.write("---")
 
-    # 5) 인스타 본문 캡션 (영상 속 공감형 / 투표형 / 설명형 탭)
-    st.markdown("#### 📝 인스타그램 본문 캡션 선택 (반응도 유도)")
-    tab_empathy, tab_vote, tab_explain = st.tabs(["❤️ 공감형", "🗳️ 투표형 (찬반)", "📑 설명형 (요약)"])
+    # 5) 팩트 기반 인스타 본문 캡션 3종 탭
+    st.markdown("#### 📝 인스타그램 본문 캡션 선택 (기사 팩트 반영)")
+    tab_empathy, tab_vote, tab_explain = st.tabs(["❤️ 공감형", "🗳️ 투표형 (찬반)", "📑 정보 설명형 (요약)"])
 
     caps = state["captions"]
     with tab_empathy:
-        st.text_area("공감형 캡션 (복사해서 인스타에 붙여넣으세요)", value=caps.get("empathy", ""), height=150)
+        st.text_area("공감형 캡션 (복사해서 인스타에 붙여넣으세요)", value=caps.get("empathy", ""), height=170)
     with tab_vote:
-        st.text_area("투표형 캡션 (댓글 토론 유도)", value=caps.get("vote", ""), height=150)
+        st.text_area("투표형 캡션 (댓글 토론 유도)", value=caps.get("vote", ""), height=170)
     with tab_explain:
-        st.text_area("설명형 캡션 (핵심 요약 & 저장 유도)", value=caps.get("explain", ""), height=150)
+        st.text_area("설명형 캡션 (핵심 요약 & 저장 유도)", value=caps.get("explain", ""), height=170)
