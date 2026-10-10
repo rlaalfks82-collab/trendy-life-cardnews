@@ -2,6 +2,7 @@ import os
 import re
 import json
 import time
+import urllib.parse
 from datetime import datetime
 from io import BytesIO
 import requests
@@ -13,7 +14,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageStat
 from pydantic import BaseModel
 from typing import List
 
-# 모바일 단일 화면 뷰 설정
+# 모바일 친화형 단일 화면 뷰
 st.set_page_config(page_title="SNS 인스타 카드뉴스 쾌속 생성기", page_icon="📱", layout="centered")
 
 # =============================================
@@ -97,7 +98,6 @@ def smart_fit_or_crop(base_img, target_w=1080, target_h=1350):
     target_ratio = target_w / target_h
     src_ratio = src_w / src_h
 
-    # 가로가 긴 사진(투샷, 단체컷): 블러 레터박스로 인물 절단 방지
     if src_ratio > 1.15:
         bg_scale = max(target_w / src_w, target_h / src_h)
         bg_w, bg_h = int(src_w * bg_scale), int(src_h * bg_scale)
@@ -117,7 +117,6 @@ def smart_fit_or_crop(base_img, target_w=1080, target_h=1350):
         bg.paste(fg, (pos_x, pos_y), fg)
         return bg
 
-    # 세로형 또는 정방형 사진
     if src_ratio > target_ratio:
         new_w = int(src_h * target_ratio)
         left_offset = int((src_w - new_w) * 0.45)
@@ -142,7 +141,7 @@ def download_image_pil(img_url):
     if not img_url:
         return None
     try:
-        res = requests.get(img_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+        res = requests.get(img_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=7)
         if res.status_code == 200 and len(res.content) > 5000:
             img = Image.open(BytesIO(res.content))
             if is_valid_photo(img):
@@ -152,13 +151,44 @@ def download_image_pil(img_url):
     return None
 
 # =============================================
-# AI 후킹 카피 & 팩트 기반 3종 캡션 엔진
+# [NEW] 기사 맞춤 AI 생성용 이미지 생성 엔진
+# =============================================
+def generate_ai_custom_image(prompt_text, seed_val=42):
+    """기사 내용에 기반한 저작권 프리 AI 생성 이미지를 즉석에서 렌더링"""
+    clean_prompt = re.sub(r'[^a-zA-Z0-9\s,]', '', prompt_text)
+    encoded_prompt = urllib.parse.quote(f"{clean_prompt}, dramatic cinematic lighting, photorealistic, 8k, editorial photography")
+    
+    # Pollinations AI 고화질 4:5(1080x1350) 생성 엔드포인트
+    gen_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val}&model=flux&nologo=true"
+    
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        res = requests.get(gen_url, headers=headers, timeout=12)
+        if res.status_code == 200 and len(res.content) > 10000:
+            return Image.open(BytesIO(res.content))
+    except Exception:
+        pass
+
+    # 백업: Unsplash 키워드 검색
+    try:
+        fallback_kw = urllib.parse.quote(clean_prompt.split(",")[0].strip())
+        res = requests.get(f"https://source.unsplash.com/1080x1350/?{fallback_kw}", headers=headers, timeout=6)
+        if res.status_code == 200 and len(res.content) > 5000:
+            return Image.open(BytesIO(res.content))
+    except Exception:
+        pass
+
+    return Image.new("RGB", (1080, 1350), color=(15, 23, 42))
+
+# =============================================
+# AI 후킹 카피 & 팩트 캡션 & 이미지 프롬프트 모델
 # =============================================
 class HeadlineCandidates(BaseModel):
     titles: List[str]
 
 class ContentSummaryResponse(BaseModel):
     card_subcopy: str
+    image_prompt: str  # AI 이미지 생성용 영문 프롬프트
     empathy: str
     vote: str
     explain: str
@@ -188,7 +218,7 @@ def generate_ai_copies(title, text):
     [작성 규칙]:
     - 기사 내용에 없는 허위 사실을 지어내지 마세요.
     - 기자 이름, 날짜, 언론사명, 대괄호 []는 제목 본문 안에 절대 포함하지 마세요.
-    - 1줄당 14자~20자 내외로 화면에 깔끔하게 들어오도록 작성하세요.
+    - 1줄당 14자~20자 내외로 작성하세요.
 
     기사 제목: {clean_t}
     기사 본문 내용: {text[:1500]}
@@ -222,7 +252,6 @@ def generate_ai_copies(title, text):
 def generate_news_content(title, text):
     clean_t = sanitize_korean_text(title)
     
-    # AI 장애 시 팩트 기반 로컬 백업
     raw_sentences = [sanitize_korean_text(s) for s in re.split(r'(?<=[.?!])\s+', text)]
     valid_sentences = [
         s for s in raw_sentences 
@@ -234,6 +263,7 @@ def generate_news_content(title, text):
 
     fallback_result = {
         "card_subcopy": f"{fact_1} {fact_2}"[:95],
+        "image_prompt": "korean doctor surgery room intense drama scene cinematic lighting",
         "empathy": (
             f"🔥 {clean_t}\n\n"
             f"📌 핵심 사건 요약\n"
@@ -268,13 +298,14 @@ def generate_news_content(title, text):
         return fallback_result
 
     prompt = f"""
-    당신은 인스타그램 전문 에디터입니다. 아래 기사 본문의 '구체적인 팩트와 정보'를 정확히 요약하여 다음 4가지 요소를 작성하세요.
+    당신은 인스타그램 전문 에디터입니다. 아래 기사 본문의 '구체적인 팩트와 정보'를 정확히 요약하여 다음 5가지 요소를 작성하세요.
     - 기자명, 날짜, 언론사명 같은 불필요한 메타데이터는 제외하고 순수 사건/콘텐츠 팩트만 담으세요.
 
     1. card_subcopy: 피드 카드 1장에 들어갈 핵심 본문 요약 (마침표로 끝나는 완결된 1~2개 문장, 70~90자 내외).
-    2. empathy (공감형): 기사의 핵심 상황/팩트를 먼저 명확히 2~3줄로 설명한 뒤, 독자의 감정을 건드려 공감 댓글을 유도.
-    3. vote (투표형): 기사의 핵심 쟁점과 대립 상황을 팩트 기반으로 정리한 뒤, 'A vs B' 양자택일 질문 제시.
-    4. explain (설명형): 기사 내용을 바탕으로 1, 2, 3번으로 나눈 핵심 요약 브리핑 및 저장 유도.
+    2. image_prompt: 이 기사 배경으로 어울리는 이미지를 AI가 생성할 수 있는 상세한 영어 프롬프트 (예: "a charismatic female doctor in white gown hospital drama cinematic realistic 8k").
+    3. empathy (공감형): 기사의 핵심 상황/팩트를 먼저 명확히 2~3줄로 설명한 뒤, 독자의 감정을 건드려 공감 댓글을 유도.
+    4. vote (투표형): 기사의 핵심 쟁점과 대립 상황을 팩트 기반으로 정리한 뒤, 'A vs B' 양자택일 질문 제시.
+    5. explain (설명형): 기사 내용을 바탕으로 1, 2, 3번으로 나눈 핵심 요약 브리핑 및 저장 유도.
 
     기사 제목: {clean_t}
     기사 본문 내용:
@@ -295,6 +326,7 @@ def generate_news_content(title, text):
             data = json.loads(res.text)
             return {
                 "card_subcopy": sanitize_korean_text(data.get("card_subcopy", fallback_result["card_subcopy"])),
+                "image_prompt": data.get("image_prompt", fallback_result["image_prompt"]),
                 "empathy": data.get("empathy", fallback_result["empathy"]),
                 "vote": data.get("vote", fallback_result["vote"]),
                 "explain": data.get("explain", fallback_result["explain"])
@@ -305,16 +337,14 @@ def generate_news_content(title, text):
     return fallback_result
 
 # =============================================
-# 단일 카드 렌더링 엔진 (인스타그램 공식 규격: 1080x1350)
+# 단일 카드 렌더링 엔진 (1080x1350)
 # =============================================
 def render_single_card(title_text, sub_text, base_img, title_size, content_size, text_y_pos):
     width, height = 1080, 1350
     t_font, c_font, b_font = load_fonts(title_size, content_size)
 
-    # 1. 배경 프레이밍
     base_img = smart_fit_or_crop(base_img, width, height)
 
-    # 2. 다크 그라데이션
     gradient = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     g_draw = ImageDraw.Draw(gradient)
 
@@ -334,14 +364,12 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
     card = Image.alpha_composite(base_img, gradient).convert("RGB")
     draw = ImageDraw.Draw(card)
 
-    # 3. 상단 브랜드 뱃지
     tag_clean = "TREND ISSUE"
     draw.rounded_rectangle([64, 64, 230, 110], radius=22, fill=(15, 23, 42, 220))
     draw.rounded_rectangle([64, 64, 230, 110], radius=22, outline=(255, 255, 255, 70), width=1)
     draw.ellipse([80, 82, 88, 90], fill=(250, 204, 21))
     draw.text((98, 76), tag_clean, font=b_font, fill=(255, 255, 255))
 
-    # 4. 텍스트 조판
     t_words = title_text.split()
     t_lines, curr = [], ""
     for w in t_words:
@@ -374,7 +402,6 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
         draw.text((64, curr_y), l, font=c_font, fill=(226, 232, 240))
         curr_y += content_size + 12
 
-    # 하단 푸터
     draw.line([64, 1240, 1016, 1240], fill=(51, 65, 85, 180), width=2)
     draw.text((64, 1260), ">> 옆으로 넘겨서 전체 내용 확인하기", font=b_font, fill=(250, 204, 21))
 
@@ -390,61 +417,70 @@ if "app_state" not in st.session_state:
         "active_title": "",
         "active_sub": "",
         "captions": {},
-        "images": [],
+        "article_images": [],
+        "ai_generated_images": [],
+        "current_image_source": "ai", # 'ai' 또는 'article'
         "current_img_idx": 0,
         "title_size": 52,
         "content_size": 26,
-        "text_y": 880
+        "text_y": 880,
+        "image_prompt": "",
+        "seed": 42
     }
 
 # =============================================
 # 📱 메인 화면 UI
 # =============================================
 st.markdown("<h2 style='text-align: center; margin-bottom: 5px;'>🚀 인스타 보너스·뉴스 카드뉴스 생성기</h2>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #64748B; margin-bottom: 25px;'>기사 링크만 넣으면 팩트 요약과 최적화 스틸컷으로 1분 만에 완성합니다</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #64748B; margin-bottom: 25px;'>기사 링크만 넣으면 맞춤 AI 생성 이미지와 팩트 요약으로 1분 만에 완성합니다</p>", unsafe_allow_html=True)
 
-# 1. URL 입력 및 원클릭 만들기 버튼
 news_url = st.text_input("🔗 뉴스 기사 링크 입력", placeholder="네이버/다음 등 포털 뉴스 기사 링크를 붙여넣으세요")
 
 if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_width=True):
     if not news_url.strip():
         st.warning("뉴스 링크를 입력해 주세요.")
     else:
-        with st.spinner("기사 본문 팩트와 스틸컷을 정확하게 분석하고 있습니다..."):
+        with st.spinner("기사 팩트 분석 및 맞춤 AI 생성 이미지를 제작하고 있습니다..."):
             try:
                 art = Article(news_url, language='ko')
                 art.download()
                 art.parse()
 
-                # 실제 기사 스틸컷 수집
-                img_pool = []
+                # 1. 실제 기사 스틸컷 수집
+                art_img_pool = []
                 if art.top_image:
                     top_img = download_image_pil(art.top_image)
-                    if top_img: img_pool.append(top_img)
+                    if top_img: art_img_pool.append(top_img)
                 for u in art.images:
                     if u != art.top_image:
                         p = download_image_pil(u)
-                        if p: img_pool.append(p)
+                        if p: art_img_pool.append(p)
 
-                if not img_pool:
-                    img_pool = [Image.new("RGB", (1080, 1350), color=(15, 23, 42))]
+                if not art_img_pool:
+                    art_img_pool = [Image.new("RGB", (1080, 1350), color=(15, 23, 42))]
 
-                # 4대 후킹 카피 5종 생성
+                # 2. 4대 후킹 카피 5종 생성
                 copies = generate_ai_copies(art.title, art.text)
 
-                # 팩트 기반 카드 본문 요약 & 3종 캡션 일괄 생성
+                # 3. 팩트 기반 카드 본문 요약 & 3종 캡션 & 영문 프롬프트 생성
                 content_res = generate_news_content(art.title, art.text)
+
+                # 4. [핵심] 기사 내용 기반 맞춤 AI 생성용 이미지 제작
+                ai_img = generate_ai_custom_image(content_res["image_prompt"], seed_val=int(time.time()) % 1000)
 
                 st.session_state.app_state["is_ready"] = True
                 st.session_state.app_state["copies"] = copies
                 st.session_state.app_state["active_title"] = copies[0]
                 st.session_state.app_state["active_sub"] = content_res["card_subcopy"]
+                st.session_state.app_state["image_prompt"] = content_res["image_prompt"]
                 st.session_state.app_state["captions"] = {
                     "empathy": content_res["empathy"],
                     "vote": content_res["vote"],
                     "explain": content_res["explain"]
                 }
-                st.session_state.app_state["images"] = img_pool
+                st.session_state.app_state["article_images"] = art_img_pool
+                st.session_state.app_state["ai_generated_images"] = [ai_img]
+                st.session_state.app_state["current_image_source"] = "ai"
                 st.session_state.app_state["current_img_idx"] = 0
 
             except Exception as e:
@@ -467,20 +503,43 @@ if state["is_ready"]:
                 state["active_title"] = c_text
                 st.rerun()
 
+    # 현재 활성 배경 이미지 선택 (AI 생성 이미지 vs 기사 원문 사진)
+    if state["current_image_source"] == "ai":
+        active_bg_img = state["ai_generated_images"][0]
+        badge_desc = "🤖 맞춤 AI 생성 이미지"
+    else:
+        active_bg_img = state["article_images"][state["current_img_idx"]]
+        badge_desc = f"📰 기사 원문 사진 ({state['current_img_idx'] + 1}/{len(state['article_images'])})"
+
     # 2) 카드 실시간 미리보기 (1080x1350)
-    current_img = state["images"][state["current_img_idx"]]
     rendered_img = render_single_card(
         state["active_title"],
         state["active_sub"],
-        current_img,
+        active_bg_img,
         state["title_size"],
         state["content_size"],
         state["text_y"]
     )
 
-    st.image(rendered_img, caption="📱 완성된 인스타그램 피드 (1080x1350 / 4:5 규격)", use_container_width=True)
+    st.image(rendered_img, caption=f"📱 완성된 인스타그램 피드 (1080x1350) · {badge_desc}", use_container_width=True)
 
-    # 3) 실시간 조절 패널 (문구 수정 / 슬라이더 조절 / 스틸컷 변경)
+    # 3) [핵심] 이미지 소스 전환 및 다시 그리기 컨트롤
+    col_img1, col_img2 = st.columns(2)
+    with col_img1:
+        if st.button("🎨 AI로 다른 이미지 다시 그리기", use_container_width=True):
+            with st.spinner("새로운 스타일로 이미지를 다시 그리고 있습니다..."):
+                new_seed = int(time.time() * 10) % 9999
+                new_ai_img = generate_ai_custom_image(state["image_prompt"], seed_val=new_seed)
+                state["ai_generated_images"] = [new_ai_img]
+                state["current_image_source"] = "ai"
+                st.rerun()
+    with col_img2:
+        if st.button("📰 기사 원문 스틸컷으로 전환/변경", use_container_width=True):
+            state["current_image_source"] = "article"
+            state["current_img_idx"] = (state["current_img_idx"] + 1) % len(state["article_images"])
+            st.rerun()
+
+    # 4) 실시간 조절 패널 (문구 수정 / 슬라이더 조절)
     with st.expander("🛠️ 문구 직접 수정 & 글자 크기/위치 조절 (커스터마이징)"):
         col_ed1, col_ed2 = st.columns(2)
         with col_ed1:
@@ -502,17 +561,12 @@ if state["is_ready"]:
         with col_sl3:
             state["text_y"] = st.slider("텍스트 높이 위치", 700, 1000, state["text_y"], step=10)
 
-        if len(state["images"]) > 1:
-            if st.button("🔄 다른 기사 사진으로 교체 (다시 그리기)", use_container_width=True):
-                state["current_img_idx"] = (state["current_img_idx"] + 1) % len(state["images"])
-                st.rerun()
-
-    # 4) 이미지 다운로드 버튼
+    # 5) 이미지 다운로드 버튼
     buf = BytesIO()
     rendered_img.save(buf, format="PNG")
     st.download_button(
         label="📥 완성된 카드 이미지 저장하기 (1080x1350)",
-        data = buf.getvalue(),
+        data=buf.getvalue(),
         file_name=f"instagram_feed_{datetime.now().strftime('%H%M%S')}.png",
         mime="image/png",
         use_container_width=True
@@ -520,7 +574,7 @@ if state["is_ready"]:
 
     st.write("---")
 
-    # 5) 팩트 기반 인스타 본문 캡션 3종 탭
+    # 6) 팩트 기반 인스타 본문 캡션 3종 탭
     st.markdown("#### 📝 인스타그램 본문 캡션 선택 (기사 팩트 반영)")
     tab_empathy, tab_vote, tab_explain = st.tabs(["❤️ 공감형", "🗳️ 투표형 (찬반)", "📑 정보 설명형 (요약)"])
 
