@@ -96,11 +96,11 @@ def sanitize_korean_text(text):
     text = re.sub(r"''\(이하\s*['\"].*?['\"]\)", "", text)
     text = re.sub(r"\(이하\s*['\"].*?['\"]\)", "", text)
     text = text.replace("''", "'").replace('""', '"')
-    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"[ \t]+", " ", text)
     return text.strip()
 
 # =============================================
-# 문장/의미 단위 균형 조판 엔진 (외톨이 단어 방지)
+# 수동 엔터 줄바꿈 보존 및 자동 지능형 줄바꿈 엔진
 # =============================================
 def wrap_korean_balanced(text, max_chars_per_line=21):
     sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
@@ -164,6 +164,20 @@ def wrap_natural_korean(text, max_chars_per_line=13):
     
     return lines
 
+def format_text_lines(text, wrap_func, max_chars_per_line):
+    """
+    사용자가 직접 줄바꿈(엔터)을 입력했으면 사용자의 줄바꿈을 100% 우선 존중하고,
+    줄바꿈 없이 한 덩어리일 때는 자동 최적 줄바꿈을 수행합니다.
+    """
+    if not text:
+        return []
+    raw_lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if len(raw_lines) > 1:
+        return raw_lines
+    elif len(raw_lines) == 1:
+        return wrap_func(raw_lines[0], max_chars_per_line)
+    return []
+
 # =============================================
 # 피사체 보호 프레이밍 엔진 (1080x1350)
 # =============================================
@@ -226,22 +240,23 @@ def download_image_pil(img_url):
     return None
 
 # =============================================
-# AI 이미지 생성 파이프라인
+# [개선] 순수 AI 생성 전용 파이프라인 (원문 사진은 절대 AI 배경으로 전용하지 않음)
 # =============================================
 def generate_contextual_ai_image(prompt_text, seed_val=42):
     clean_prompt = re.sub(r'[^a-zA-Z0-9\s,]', '', prompt_text).strip()
     if not clean_prompt:
-        clean_prompt = "flagship tech product documentary scene"
+        clean_prompt = "flagship luxury architectural building exterior shot"
     
     variations = [
-        "dramatic cinematic lighting, photorealistic 8k, ultra sharp focus, dark background",
-        "studio product photography, clean professional lighting, crisp contrast, 8k",
-        "photojournalism editorial documentary style, 8k resolution, authentic detail",
-        "close-up detail shot, moody dark aesthetic, high contrast editorial"
+        "dramatic cinematic lighting, photorealistic 8k, ultra sharp focus, dark atmosphere, editorial photography",
+        "studio commercial photography, architectural grandeur, crisp contrast, 8k resolution, elegant mood",
+        "photojournalism editorial documentary style, 8k resolution, authentic detail, realistic textures",
+        "golden hour cinematic lighting, luxury aesthetic, moody dark contrast, award-winning photography"
     ]
     selected_style = variations[seed_val % len(variations)]
     final_prompt = f"{clean_prompt}, {selected_style}"
 
+    # 1순위: Google Imagen 3 직접 호출
     if client:
         try:
             result = client.models.generate_images(
@@ -259,16 +274,17 @@ def generate_contextual_ai_image(prompt_text, seed_val=42):
         except Exception:
             pass
 
+    # 2순위: 다중 고화질 AI 생성 엔드포인트 순회
     encoded = urllib.parse.quote(final_prompt)
     ts = int(time.time() * 1000)
     external_urls = [
         f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1350&seed={seed_val}&model=turbo&nologo=true&t={ts}",
-        f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1350&seed={seed_val + 99}&nologo=true&t={ts + 1}",
-        f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1350&seed={seed_val + 333}&model=flux&nologo=true&t={ts + 2}"
+        f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1350&seed={seed_val + 111}&nologo=true&t={ts + 1}",
+        f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1350&seed={seed_val + 777}&model=flux&nologo=true&t={ts + 2}"
     ]
 
     headers = {
-        "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.{random.randint(1, 200)}",
+        "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.{random.randint(1, 250)}",
         "Cache-Control": "no-cache"
     }
 
@@ -282,6 +298,7 @@ def generate_contextual_ai_image(prompt_text, seed_val=42):
         except Exception:
             continue
 
+    # AI 생성 불가 시 원문 이미지를 덮어쓰지 않고 고급 다크 에디토리얼 캔버스 렌더링
     base = Image.new("RGB", (1080, 1350), color=(15, 23, 42))
     draw = ImageDraw.Draw(base)
     for y in range(0, 1350):
@@ -359,7 +376,7 @@ def generate_all_card_content(title, text):
     raise Exception(f"AI 생성 실패: {last_err}")
 
 # =============================================
-# 단일 카드 렌더링 엔진 (문장 단위 조판 적용)
+# 단일 카드 렌더링 엔진 (수동 줄바꿈 지원)
 # =============================================
 def render_single_card(title_text, sub_text, base_img, title_size, content_size, text_y_pos):
     width, height = 1080, 1350
@@ -419,8 +436,9 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
     draw.ellipse([dot_cx - dot_r, dot_cy - dot_r, dot_cx + dot_r, dot_cy + dot_r], fill=(251, 191, 36))
     draw.text((badge_x + 40, badge_y + 14), "TREND ISSUE", font=b_font, fill=(241, 245, 249, 235))
 
-    t_lines = wrap_natural_korean(title_text, max_chars_per_line=13)
-    c_lines = wrap_korean_balanced(sub_text, max_chars_per_line=21)
+    # 사용자의 수동 줄바꿈(엔터) 우선 존중
+    t_lines = format_text_lines(title_text, wrap_natural_korean, max_chars_per_line=13)
+    c_lines = format_text_lines(sub_text, wrap_korean_balanced, max_chars_per_line=21)
 
     curr_y = text_y_pos
     draw.rounded_rectangle([64, curr_y - 20, 114, curr_y - 13], radius=4, fill=(251, 191, 36))
@@ -582,15 +600,16 @@ if state["is_ready"]:
         else:
             st.button("📰 기사 원문 사진 없음", disabled=True, use_container_width=True)
 
-    with st.expander("🛠️ 문구 직접 수정 & 글자 크기/위치 조절 (커스터마이징)"):
+    with st.expander("🛠️ 문구 직접 수정 & 줄바꿈/글자 크기/위치 조절 (커스터마이징)"):
+        st.caption("💡 팁: 제목이나 본문 입력창에서 원하는 위치에 **엔터(줄바꿈)**를 치시면 입력하신 그대로 카드뉴스 줄바꿈이 적용됩니다.")
         col_ed1, col_ed2 = st.columns(2)
         with col_ed1:
-            new_title = st.text_input("제목 문구 수정", value=state["active_title"])
+            new_title = st.text_area("제목 문구 수정 (엔터로 줄바꿈 지정 가능)", value=state["active_title"], height=90)
             if new_title != state["active_title"]:
                 state["active_title"] = new_title
                 st.rerun()
         with col_ed2:
-            new_sub = st.text_area("본문 문구 수정", value=state["active_sub"], height=70)
+            new_sub = st.text_area("본문 문구 수정 (엔터로 줄바꿈 지정 가능)", value=state["active_sub"], height=90)
             if new_sub != state["active_sub"]:
                 state["active_sub"] = new_sub
                 st.rerun()
