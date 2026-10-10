@@ -15,11 +15,10 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageStat
 from pydantic import BaseModel
 from typing import List
 
-# 모바일 단일 화면 뷰 설정
 st.set_page_config(page_title="SNS 인스타 카드뉴스 쾌속 생성기", page_icon="📱", layout="centered")
 
 # =============================================
-# 1. API 키 설정 (Secrets 및 상단 직접 입력 지원)
+# 1. API 키 설정
 # =============================================
 api_key = os.environ.get("GEMINI_API_KEY")
 if not api_key and "GEMINI_API_KEY" in st.secrets:
@@ -101,7 +100,7 @@ def sanitize_korean_text(text):
     return text.strip()
 
 # =============================================
-# 어절 단위 지능형 자연스러운 줄바꿈 엔진 (Word-wrap)
+# 어절 단위 줄바꿈 엔진
 # =============================================
 def wrap_natural_korean(text, max_chars_per_line=13):
     words = text.split()
@@ -183,40 +182,55 @@ def download_image_pil(img_url):
     return None
 
 # =============================================
-# [개선] 100% 무한 갱신 보장 AI 이미지 생성 파이프라인
+# [핵심] Google Imagen 3 우선 호출 + 다중 백업 생성 엔진
 # =============================================
 def generate_contextual_ai_image(prompt_text, seed_val=42):
     clean_prompt = re.sub(r'[^a-zA-Z0-9\s,]', '', prompt_text).strip()
     if not clean_prompt:
         clean_prompt = "flagship tech product documentary scene"
     
-    visual_styles = [
-        "cinematic lighting, ultra-realistic, 8k, professional photography, dramatic shadows, highly detailed",
-        "studio product shot, ultra sharp details, dark background, photorealistic 8k, Award Winning photo",
-        "handheld action photography, natural movement blur, raw image quality, 8k documentary capture",
-        "industrial tech aesthetics, dark cinematic look, high contrast, immersive details, award winning"
+    variations = [
+        "dramatic cinematic lighting, photorealistic 8k, ultra sharp focus, dark background",
+        "studio product photography, clean professional lighting, crisp contrast, 8k",
+        "photojournalism editorial documentary style, 8k resolution, authentic detail",
+        "close-up detail shot, moody dark aesthetic, high contrast editorial"
     ]
-    selected_style = random.choice(visual_styles)
-    enhanced_prompt = f"{clean_prompt}, {selected_style}"
-    encoded_prompt = urllib.parse.quote(enhanced_prompt)
+    selected_style = variations[seed_val % len(variations)]
+    final_prompt = f"{clean_prompt}, {selected_style}"
 
-    ts = int(time.time() * 1000) + random.randint(100, 999)
+    # 1순위: Google Imagen 3 직접 호출 (동일 API 키 활용, Rate Limit 없는 안정적 생성)
+    if client:
+        try:
+            result = client.models.generate_images(
+                model='imagen-3.0-generate-002',
+                prompt=final_prompt,
+                config=types.GenerateImagesConfig(
+                    number_of_images=1,
+                    aspect_ratio="3:4",
+                    output_mime_type="image/jpeg"
+                )
+            )
+            for gen_img in result.generated_images:
+                img = Image.open(BytesIO(gen_img.image.image_bytes))
+                return img.resize((1080, 1350), Image.Resampling.LANCZOS)
+        except Exception:
+            pass
 
-    candidate_urls = [
-        f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val}&model=turbo&nologo=true&t={ts}",
-        f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val + 52}&nologo=true&t={ts + 1}",
-        f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val + 248}&model=flux&nologo=true&t={ts + 2}",
-        f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val + 891}&enhance=true&nologo=true&t={ts + 3}"
+    # 2순위: 외부 AI 생성 풀 (Pollinations 캐시 우회)
+    encoded = urllib.parse.quote(final_prompt)
+    ts = int(time.time() * 1000)
+    external_urls = [
+        f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1350&seed={seed_val}&model=turbo&nologo=true&t={ts}",
+        f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1350&seed={seed_val + 99}&nologo=true&t={ts + 1}",
+        f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1350&seed={seed_val + 333}&model=flux&nologo=true&t={ts + 2}"
     ]
 
     headers = {
-        "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.{random.randint(1, 200)} Safari/537.36",
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        "Pragma": "no-cache",
-        "Expires": "0"
+        "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.{random.randint(1, 200)}",
+        "Cache-Control": "no-cache"
     }
 
-    for u in candidate_urls:
+    for u in external_urls:
         try:
             res = requests.get(u, headers=headers, timeout=12)
             if res.status_code == 200 and len(res.content) > 10000:
@@ -226,6 +240,7 @@ def generate_contextual_ai_image(prompt_text, seed_val=42):
         except Exception:
             continue
 
+    # 폴백 다크 캔버스
     base = Image.new("RGB", (1080, 1350), color=(15, 23, 42))
     draw = ImageDraw.Draw(base)
     for y in range(0, 1350):
@@ -304,7 +319,7 @@ def generate_all_card_content(title, text):
     raise Exception(f"AI 생성 실패: {last_err}")
 
 # =============================================
-# 단일 카드 렌더링 엔진 (디자인 미감 & 뱃지 리파인)
+# 단일 카드 렌더링 엔진
 # =============================================
 def render_single_card(title_text, sub_text, base_img, title_size, content_size, text_y_pos):
     width, height = 1080, 1350
@@ -405,7 +420,7 @@ if "app_state" not in st.session_state:
     }
 
 # =============================================
-# 📱 메인 화면 UI
+# 메인 화면 UI
 # =============================================
 st.markdown("<h2 style='text-align: center; margin-bottom: 5px;'>🚀 인스타 단일 피드 카드뉴스 생성기</h2>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: #64748B; margin-bottom: 25px;'>기사 링크만 넣으면 기사 내용에 일치하는 비주얼과 팩트 요약으로 완성합니다</p>", unsafe_allow_html=True)
@@ -463,7 +478,7 @@ if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_
                 st.error(f"생성 실패: {e}")
 
 # =============================================
-# 2. 결과 생성 완료 시: 실시간 인터랙션 화면
+# 결과 생성 완료 시: 실시간 인터랙션 화면
 # =============================================
 state = st.session_state.app_state
 
@@ -508,9 +523,9 @@ if state["is_ready"]:
     with col_img1:
         if st.button("🎨 AI로 다른 이미지 다시 그리기", key=f"btn_redraw_main_{state['redraw_count']}", use_container_width=True):
             state["redraw_count"] += 1
-            new_seed = int(time.time() * 100) + random.randint(1000, 9999) + state["redraw_count"] * 142
+            new_seed = random.randint(10000, 999999) + state["redraw_count"] * 100
             
-            with st.spinner("기사 내용에 맞는 새 비주얼을 그리고 있습니다... (새 이미지 생성 중)"):
+            with st.spinner(f"기사 내용에 맞는 새 비주얼을 그리고 있습니다... ({state['redraw_count'] + 1}회차)"):
                 new_ai_img = generate_contextual_ai_image(state["image_prompt"], seed_val=new_seed)
                 state["ai_generated_images"] = [new_ai_img.copy()]
                 state["current_image_source"] = "ai"
