@@ -40,8 +40,8 @@ if api_key:
     except Exception as e:
         st.sidebar.error(f"API 클라이언트 초기화 실패: {e}")
 
-# 스타일 옵션
-st.sidebar.header("🎨 트렌디라이프 UX/디자인 옵션")
+# 스타일 및 캡션 옵션
+st.sidebar.header("🎨 트렌디라이프 옵션")
 image_mode = st.sidebar.radio(
     "📸 이미지 생성 모드 선택",
     [
@@ -60,6 +60,17 @@ cover_source_choice = st.sidebar.radio(
     index=0
 )
 
+# [NEW] 인스타 캡션 유형 선택 (알고리즘 부스팅)
+caption_style = st.sidebar.radio(
+    "✍️ 인스타그램 캡션 작성 스타일",
+    [
+        "❤️ 공감형 (독자 감정 자극 & 일상 공감 유도)",
+        "🗳️ 찬반 투표형 (댓글 토론 및 참여도 극대화)",
+        "📑 정보 설명형 (핵심 요약 & 저장 유도)"
+    ],
+    index=0
+)
+
 title_size = st.sidebar.slider("제목 글자 크기", min_value=46, max_value=64, value=52, step=2)
 content_size = st.sidebar.slider("본문 글자 크기", min_value=24, max_value=34, value=26, step=2)
 brand_tag = st.sidebar.text_input("상단 브랜딩 태그", value="TREND ISSUE")
@@ -68,7 +79,7 @@ brand_tag = st.sidebar.text_input("상단 브랜딩 태그", value="TREND ISSUE"
 st.markdown("""
 <div style="text-align: center; line-height: 1.35; margin-bottom: 25px;">
     <h2 style="color: #0F172A; margin-bottom: 8px; font-weight: 800;">🔥 트렌디라이프 매거진 카드뉴스 생성기</h2>
-    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">외부 무작위 이미지 원천 차단 & 피사체 보호 프레이밍 적용</p>
+    <p style="color: #475569; font-size: 19px; font-weight: 600; margin: 0;">4대 후킹 카피라이팅 & 알고리즘 맞춤형 캡션 자동 생성 시스템</p>
 </div>
 """, unsafe_allow_html=True)
 st.write("---")
@@ -172,7 +183,6 @@ def smart_fit_or_crop(base_img, target_w=1080, target_h=1350):
     target_ratio = target_w / target_h
     src_ratio = src_w / src_h
 
-    # 가로가 긴 투샷/단체컷: 레터박스 블러 처리로 얼굴 보존
     if src_ratio > 1.15:
         bg_scale = max(target_w / src_w, target_h / src_h)
         bg_w, bg_h = int(src_w * bg_scale), int(src_h * bg_scale)
@@ -195,7 +205,6 @@ def smart_fit_or_crop(base_img, target_w=1080, target_h=1350):
         bg.paste(fg, (pos_x, pos_y), fg)
         return bg
 
-    # 세로형 또는 정방형 사진: 상단 여백 확보 크롭
     if src_ratio > target_ratio:
         new_w = int(src_h * target_ratio)
         left_offset = int((src_w - new_w) * 0.45)
@@ -208,9 +217,6 @@ def smart_fit_or_crop(base_img, target_w=1080, target_h=1350):
 
     return cropped.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
-# ---------------------------------------------
-# 로고 및 단색 그래픽 자동 필터링 (Variance 체크)
-# ---------------------------------------------
 def is_valid_photo(pil_img):
     if pil_img.width < 350 or pil_img.height < 350:
         return False
@@ -228,9 +234,6 @@ def is_valid_photo(pil_img):
 
     return True
 
-# ---------------------------------------------
-# 지각 해시 (dHash) 기반 중복 검증
-# ---------------------------------------------
 def calculate_dhash(image):
     img_gray = image.convert("L").resize((9, 8), Image.Resampling.LANCZOS)
     pixels = list(img_gray.getdata())
@@ -261,6 +264,25 @@ def download_image_pil(img_url):
         pass
     return None
 
+def fetch_keyword_stock_image(keyword, fallback_img=None):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    clean_keyword = urllib.parse.quote(keyword.strip()) if keyword else "editorial"
+    search_url = f"https://source.unsplash.com/1080x1350/?{clean_keyword}"
+    try:
+        res = requests.get(search_url, headers=headers, timeout=5, allow_redirects=True)
+        if res.status_code == 200 and len(res.content) > 5000:
+            return Image.open(BytesIO(res.content))
+    except:
+        pass
+
+    if fallback_img:
+        try:
+            return fallback_img.copy().filter(ImageFilter.GaussianBlur(25))
+        except:
+            pass
+
+    return Image.new("RGB", (1080, 1350), color=(18, 24, 34))
+
 # Pydantic 모델
 class SlideItem(BaseModel):
     page: int
@@ -285,7 +307,14 @@ FALLBACK_MODELS = [
 def call_gemini_headlines(prompt, default_title):
     clean_default = sanitize_korean_text(default_title)
     if not client:
-        return {"titles": [clean_default, f"'{clean_default[:18]}' 핵심 쟁점", f"{clean_default[:18]} 집중 조명"]}
+        return {
+            "titles": [
+                f"🎯 [타겟] {clean_default[:16]} 놓치는 분들 꼭 보세요",
+                f"🚫 [금지] 절대 {clean_default[:16]}부터 보지 마세요",
+                f"🔢 [숫자] 단 1회 만에 난리 난 {clean_default[:14]}",
+                f"📖 [스토리] 관계자가 밝힌 {clean_default[:14]} 비하인드"
+            ]
+        }
 
     for model_name in FALLBACK_MODELS:
         try:
@@ -305,18 +334,19 @@ def call_gemini_headlines(prompt, default_title):
                 continue
             time.sleep(1)
 
-    st.info("💡 AI 할당량 소진으로 로컬 스마트 분석 모드로 헤드라인을 생성했습니다.")
+    st.info("💡 AI 할당량 소진으로 로컬 스마트 분석 모드로 4대 후킹 헤드라인을 생성했습니다.")
     return {
         "titles": [
-            f"\"{clean_default}\"",
-            f"요즘 화제라는 '{clean_default[:16]}' 무슨 일일까?",
-            f"실시간 시선 집중된 '{clean_default[:16]}' 핵심 정리"
+            f"🎯 [타겟] {clean_default[:16]} 놓치면 후회하는 이유",
+            f"🚫 [금지] 절대 {clean_default[:16]} 그냥 넘기지 마세요",
+            f"🔢 [숫자] 공개 직후 1위에 오른 {clean_default[:14]}",
+            f"📖 [스토리] 10년 차 에디터가 감탄한 {clean_default[:14]}"
         ]
     }
 
-def call_gemini_script(prompt, article_title, article_text):
+def call_gemini_script(prompt, article_title, article_text, cap_type):
     if not client:
-        return build_local_editorial_script(article_title, article_text)
+        return build_local_editorial_script(article_title, article_text, cap_type)
 
     for model_name in FALLBACK_MODELS:
         try:
@@ -337,12 +367,9 @@ def call_gemini_script(prompt, article_title, article_text):
             time.sleep(1)
 
     st.warning("⚠️ AI 일일 사용량이 소진되어 매거진 전용 완성형 스토리텔링으로 작성합니다.")
-    return build_local_editorial_script(article_title, article_text)
+    return build_local_editorial_script(article_title, article_text, cap_type)
 
-# ---------------------------------------------
-# 매거진 완결형 스토리텔링 엔진 (Local Fallback)
-# ---------------------------------------------
-def build_local_editorial_script(title, text):
+def build_local_editorial_script(title, text, cap_type):
     clean_title = sanitize_korean_text(title)
     
     raw_sentences = [sanitize_korean_text(s) for s in re.split(r'(?<=[.?!])\s+', text)]
@@ -356,45 +383,25 @@ def build_local_editorial_script(title, text):
     s3 = valid_sentences[2] if len(valid_sentences) > 2 else "타협 없는 시원한 전개와 거침없는 카타르시스가 시청자의 시선을 사로잡습니다."
     s4 = valid_sentences[3] if len(valid_sentences) > 3 else "탄탄한 연기력을 자랑하는 배우들의 숨 막히는 호흡이 몰입도를 극대화합니다."
 
+    # 캡션 스타일 분기 로직
+    if "공감형" in cap_type:
+        cap_text = f"🔥 {clean_title}\n\n오늘 소식 보면서 마음 한구석이 찌릿하셨던 분들 많으시죠? 저 역시 이번 소식을 보며 깊은 인상을 받았습니다.\n\n여러분의 오늘 하루는 어떠셨나요? 공감되셨다면 댓글로 따뜻한 이야기 들려주세요 ❤️\n\n#이슈 #공감 #트렌드 #트렌디라이프"
+    elif "찬반 투표형" in cap_type:
+        cap_text = f"🔥 {clean_title}\n\n지금 온라인과 커뮤니티에서 가장 뜨겁게 찬반이 갈리는 주제입니다.\n\n👉 A. 완벽히 통쾌하고 사이다다\n👉 B. 아직은 조금 더 지켜봐야 한다\n\n여러분의 솔직한 생각은 어느 쪽인가요? 댓글로 A 또는 B를 남겨주세요! 👇\n\n#투표 #토론 #이슈 #트렌디라이프"
+    else:
+        cap_text = f"📌 {clean_title} 핵심 3줄 요약\n\n1. 화제의 핵심 이슈와 배경 전격 공개\n2. 놓치면 아쉬운 핵심 관전 포인트\n3. 앞으로 이어질 새로운 전개와 파장\n\n도움이 되셨다면 나중에 다시 보실 수 있게 [저장]해 두세요 🔖\n\n#정보 #요약 #트렌드 #뉴스"
+
     return {
         "slides": [
-            {
-                "page": 1,
-                "headline": clean_title,
-                "subhead": s1,
-                "img_keyword": "drama main actor"
-            },
-            {
-                "page": 2,
-                "headline": "도대체 무슨 일일까?",
-                "subhead": s2,
-                "img_keyword": "drama suspense"
-            },
-            {
-                "page": 3,
-                "headline": "거침없는 사이다 매력",
-                "subhead": s3,
-                "img_keyword": "charismatic scene"
-            },
-            {
-                "page": 4,
-                "headline": "믿고 보는 배우 라인업",
-                "subhead": s4,
-                "img_keyword": "intense drama"
-            },
-            {
-                "page": 5,
-                "headline": "오늘 밤 첫 방송 시작",
-                "subhead": "안방극장에 통쾌한 전율을 선사할 화제의 신작을 오늘 밤 본방송으로 직접 확인해 보세요.",
-                "img_keyword": "broadcasting"
-            }
+            {"page": 1, "headline": clean_title, "subhead": s1, "img_keyword": "drama main actor"},
+            {"page": 2, "headline": "도대체 무슨 일일까?", "subhead": s2, "img_keyword": "drama suspense"},
+            {"page": 3, "headline": "거침없는 사이다 매력", "subhead": s3, "img_keyword": "charismatic scene"},
+            {"page": 4, "headline": "믿고 보는 배우 라인업", "subhead": s4, "img_keyword": "intense drama"},
+            {"page": 5, "headline": "오늘 밤 첫 방송 시작", "subhead": "안방극장에 통쾌한 전율을 선사할 화제의 신작을 오늘 밤 본방송으로 직접 확인해 보세요.", "img_keyword": "broadcasting"}
         ],
-        "caption": f"🔥 {clean_title}\n\n화제의 신작 소식! 과연 어떤 통쾌한 활약을 보여줄까요?\n\n#드라마 #트렌드 #이슈 #트렌디라이프"
+        "caption": cap_text
     }
 
-# ---------------------------------------------
-# UX 가독성 단락 조판 (Measure Formatting)
-# ---------------------------------------------
 def format_lines_by_measure(text, max_chars_per_line):
     words = text.strip().split()
     lines, curr = [], ""
@@ -492,13 +499,13 @@ def render_trendportal_card(page, total_pages, title, content, base_img, fonts, 
     return card
 
 # ---------------------------------------------
-# 1단계: 기사 분석
+# 1단계: 기사 분석 (4대 후킹 공식 적용)
 # ---------------------------------------------
-if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="primary", use_container_width=True):
+if st.button("🔍 1단계: 기사 분석 및 4대 후킹 헤드라인 추천받기", type="primary", use_container_width=True):
     if not news_url_1.strip():
         st.warning("첫 번째 뉴스 기사 링크를 입력해 주세요.")
     else:
-        with st.spinner("기사 본문과 스틸컷 이미지들을 분석 및 정제하고 있습니다..."):
+        with st.spinner("기사 분석 및 4대 후킹 카피라이팅을 추출하고 있습니다..."):
             try:
                 raw_image_urls = []
 
@@ -550,11 +557,20 @@ if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="
                     "image_urls": unique_urls
                 }
 
+                # 4대 검증된 후킹 공식 프롬프트 주입
                 cand_prompt = f"""
-                당신은 인스타그램 트렌드 매거진(@trendy.life_newwws)의 수석 카피라이터이자 UX 에디터입니다.
-                독자의 시선을 사로잡는 강력한 후킹 제목 3가지를 만드세요.
-                - 기자 이름, 날짜, 언론사명, 괄호 따위의 노이즈는 절대 넣지 마세요.
-                - 따옴표와 핵심 키워드만 사용하여 완성하세요.
+                당신은 인스타그램 트렌드 매거진(@trendy.life_newwws)의 수석 카피라이터입니다.
+                아래 4가지 검증된 후킹 카피 공식에 맞춰 독자의 스크롤을 멈추는 헤드라인 4개를 생성하세요.
+
+                [4대 후킹 공식]:
+                1. 🎯 [타겟 지목형]: "내 얘기잖아?" 싶어 손가락이 멈추는 제목 (예: "○○ 자꾸 놓치는 분들 꼭 보세요")
+                2. 🚫 [금지/경고형]: 상식을 뒤집어 뇌가 반응하게 만드는 제목 (예: "절대 ○○부터 보지 마세요")
+                3. 🔢 [숫자/구체성]: 명확한 숫자와 팩트로 신뢰와 궁금증을 주는 제목 (예: "단 1회 만에 시청률 2배 뛴 이유")
+                4. 📖 [스토리텔링]: 관점을 바꾸고 비하인드를 담은 독보적인 제목 (예: "10년 차 관계자가 감탄한 결정적 디테일")
+
+                [작성 규칙]:
+                - 기자 이름, 날짜(오늘, 몇일 등), 언론사명, [ ] 대괄호는 제목 본문 안에 절대 금지 (접두사 🎯 [타겟], 🚫 [금지] 등은 식별용으로 붙여주세요)
+                - 1줄당 14자~20자 내외로 화면에 깔끔하게 들어오도록 작성
 
                 기사 원문 제목: {combined_title}
                 기사 본문 요약: {combined_text[:1400]}
@@ -571,22 +587,24 @@ if st.button("🔍 1단계: 기사 분석 및 헤드라인 추천받기", type="
 # 2단계: 제목 선택 및 맞춤 카드뉴스 생성
 # ---------------------------------------------
 if st.session_state.headline_candidates:
-    st.subheader("💡 마음에 드는 표지 헤드라인을 선택하세요")
-    selected_headline = st.radio(
-        "추천 헤드라인 목록:",
+    st.subheader("💡 마음에 드는 4대 후킹 헤드라인을 선택하세요")
+    selected_headline_raw = st.radio(
+        "추천 헤드라인 목록 (공식별):",
         st.session_state.headline_candidates,
         index=0
     )
+    # 제목 태그(🎯 [타겟] 등) 제거 후 실제 슬라이드에 들어갈 제목 추출
+    selected_headline = re.sub(r"^[^\w]*\[.*?\]\s*", "", selected_headline_raw).strip()
 
     if st.button("🚀 선택한 헤드라인으로 카드뉴스 완성하기", type="primary", use_container_width=True):
         art = st.session_state.article_data
-        with st.spinner("피사체 보호 프레이밍 및 조판을 적용 중입니다..."):
+        with st.spinner(f"피사체 보호 프레이밍 및 [{caption_style.split()[0]}] 캡션을 생성 중입니다..."):
             script_prompt = f"""
             당신은 인스타그램 트렌드 매거진(@trendy.life_newwws)의 전문 에디터입니다.
             표지 제목은 반드시 "{selected_headline}"을 사용하세요.
             반드시 5장의 슬라이드(page 1부터 5까지)를 구성하세요.
             
-            [절대 작성 수칙 - 엄격 준수]:
+            [슬라이드 작성 수칙]:
             1. 문장은 중간에 끊기지 않도록 완결된 1개의 문장(또는 자연스러운 2개 문장, 마침표 필수)으로 70~90자 내외로 작성하세요.
             2. '스튜디오S', '극본 편성근', '아이즈 최재욱 기자', '28일 공개' 같은 제작사 정보, 날짜, 기사 정보는 절대 넣지 마세요.
             3. 각 슬라이드의 역할:
@@ -597,10 +615,14 @@ if st.session_state.headline_candidates:
                - 5번: '댓글 질문'을 본문에 쓰지 말고, 작품/사건에 대한 최종 기대감을 매끄럽게 서술하세요.
             4. 각 슬라이드의 어울리는 검색 키워드를 'img_keyword'에 영어 1~2단어로 작성하세요.
 
+            [인스타그램 본문 캡션 작성 수칙]:
+            - 요청 스타일: {caption_style}
+            - 줄바꿈을 적절히 넣고 독자의 적극적인 반응(저장/공유/댓글)을 이끌어내도록 작성하세요.
+
             기사 내용: {art['text']}
             """
             try:
-                st.session_state.full_script = call_gemini_script(script_prompt, art['title'], art['text'])
+                st.session_state.full_script = call_gemini_script(script_prompt, art['title'], art['text'], caption_style)
                 data = st.session_state.full_script
                 fonts = load_fonts(title_size, content_size)
 
@@ -683,8 +705,7 @@ if st.session_state.headline_candidates:
                         if len(used_pool) > 0:
                             base_img = used_pool.pop(0)
                         else:
-                            # [핵심] 스틸컷이 소진되었을 때 엉뚱한 외부 랜덤 사진(딸기 등) 절대 금지!
-                            # 메인 대표 스틸컷을 블러/다크 톤다운하여 세련된 엔딩 카드로 연출
+                            # 스틸컷 소진 시 메인 스틸컷 블러 처리로 세련된 엔딩 연출 (외부 엉뚱한 사진 절대 금지)
                             if fallback_cover:
                                 base_img = fallback_cover.copy().filter(ImageFilter.GaussianBlur(18))
                             else:
@@ -718,7 +739,7 @@ if st.session_state.headline_candidates:
 # 3단계: 화면 표시
 # ---------------------------------------------
 if st.session_state.rendered_images and st.session_state.zip_data:
-    st.success("🎉 외부 엉뚱한 이미지 없이 완성도 높은 매거진 피드가 생성되었습니다!")
+    st.success("🎉 4대 후킹 카피와 맞춤형 캡션이 적용된 피드가 완성되었습니다!")
 
     st.download_button(
         label="📦 트렌디라이프 피드 한 번에 다운로드 (ZIP)",
@@ -737,5 +758,5 @@ if st.session_state.rendered_images and st.session_state.zip_data:
         with grid_cols[idx]:
             st.image(img, caption=f"{idx + 1}번 슬라이드", use_container_width=True)
 
-    st.subheader("📝 인스타그램 캡션 복사")
-    st.text_area("캡션 및 해시태그", value=st.session_state.full_script.get("caption", ""), height=160)
+    st.subheader(f"📝 인스타그램 캡션 복사 ({caption_style.split()[1]})")
+    st.text_area("캡션 및 해시태그", value=st.session_state.full_script.get("caption", ""), height=170)
