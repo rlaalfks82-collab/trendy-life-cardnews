@@ -395,4 +395,233 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
     b_draw.rounded_rectangle(
         [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
         radius=badge_radius,
-        fill=(10, 18, 30,
+        fill=(10, 18, 30, 200)
+    )
+
+    for i in range(2):
+        b_draw.rounded_rectangle(
+            [badge_x - i, badge_y - i, badge_x + badge_w + i, badge_y + badge_h + i],
+            radius=badge_radius + i,
+            outline=(255, 255, 255, int(45 - i * 15)),
+            width=1
+        )
+    b_draw.rounded_rectangle(
+        [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
+        radius=badge_radius,
+        outline=(15, 25, 40, 90),
+        width=2
+    )
+
+    card = Image.alpha_composite(card.convert("RGBA"), badge_layer).convert("RGB")
+    draw = ImageDraw.Draw(card)
+
+    dot_cx, dot_cy, dot_r = badge_x + 24, badge_y + 27, 4
+    draw.ellipse([dot_cx - dot_r, dot_cy - dot_r, dot_cx + dot_r, dot_cy + dot_r], fill=(251, 191, 36))
+    draw.text((badge_x + 40, badge_y + 14), "TREND ISSUE", font=b_font, fill=(241, 245, 249, 235))
+
+    t_lines = wrap_natural_korean(title_text, max_chars_per_line=13)
+    c_lines = wrap_korean_balanced(sub_text, max_chars_per_line=21)
+
+    curr_y = text_y_pos
+    draw.rounded_rectangle([64, curr_y - 20, 114, curr_y - 13], radius=4, fill=(251, 191, 36))
+
+    for l in t_lines:
+        draw.text((64, curr_y), l, font=t_font, fill=(255, 255, 255))
+        curr_y += title_size + 14
+
+    curr_y += 18
+    for l in c_lines:
+        draw.text((64, curr_y), l, font=c_font, fill=(226, 232, 240))
+        curr_y += content_size + 14
+
+    draw.line([64, 1260, 1016, 1260], fill=(51, 65, 85, 140), width=2)
+    return card
+
+# =============================================
+# 세션 상태 관리
+# =============================================
+if "app_state" not in st.session_state:
+    st.session_state.app_state = {
+        "is_ready": False,
+        "copies": [],
+        "active_title": "",
+        "active_sub": "",
+        "captions": {},
+        "article_images": [],
+        "ai_generated_images": [],
+        "current_image_source": "ai",
+        "current_img_idx": 0,
+        "title_size": 54,
+        "content_size": 30,
+        "text_y": 860,
+        "image_prompt": "modern luxury penthouse villa exterior architectural photography",
+        "seed": 42,
+        "redraw_count": 0
+    }
+
+# =============================================
+# 메인 화면 UI
+# =============================================
+st.markdown("<h2 style='text-align: center; margin-bottom: 5px;'>🚀 인스타 단일 피드 카드뉴스 생성기</h2>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #64748B; margin-bottom: 25px;'>기사 링크만 넣으면 기사 내용에 일치하는 비주얼과 팩트 요약으로 완성합니다</p>", unsafe_allow_html=True)
+
+news_url = st.text_input("🔗 뉴스 기사 링크 입력", placeholder="네이버/다음 등 포털 뉴스 기사 링크를 붙여넣으세요")
+
+if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_width=True):
+    if not news_url.strip():
+        st.warning("뉴스 링크를 입력해 주세요.")
+    else:
+        with st.spinner("기사 분석 및 내용에 맞는 맞춤 이미지를 제작하고 있습니다..."):
+            try:
+                art = Article(news_url, language='ko')
+                art.download()
+                art.parse()
+
+                if not art.text or len(art.text.strip()) < 50:
+                    st.error("기사 본문을 불러오지 못했습니다. 링크를 다시 확인해 주세요.")
+                else:
+                    art_img_pool = []
+                    if art.top_image:
+                        top_img = download_image_pil(art.top_image)
+                        if top_img: art_img_pool.append(top_img)
+                    for u in art.images:
+                        if u != art.top_image:
+                            p = download_image_pil(u)
+                            if p: art_img_pool.append(p)
+
+                    if not art_img_pool:
+                        art_img_pool = [Image.new("RGB", (1080, 1350), color=(15, 23, 42))]
+
+                    ai_result = generate_all_card_content(art.title, art.text)
+                    
+                    initial_seed = random.randint(1001, 99999)
+                    ai_img = generate_contextual_ai_image(ai_result["image_prompt"], seed_val=initial_seed)
+
+                    st.session_state.app_state["is_ready"] = True
+                    st.session_state.app_state["copies"] = ai_result["titles"]
+                    st.session_state.app_state["active_title"] = ai_result["titles"][0]
+                    st.session_state.app_state["active_sub"] = ai_result["card_subcopy"]
+                    st.session_state.app_state["image_prompt"] = ai_result["image_prompt"]
+                    st.session_state.app_state["captions"] = {
+                        "empathy": ai_result["empathy"],
+                        "vote": ai_result["vote"],
+                        "explain": ai_result["explain"]
+                    }
+                    st.session_state.app_state["article_images"] = art_img_pool
+                    st.session_state.app_state["ai_generated_images"] = [ai_img]
+                    st.session_state.app_state["current_image_source"] = "ai"
+                    st.session_state.app_state["current_img_idx"] = 0
+                    st.session_state.app_state["seed"] = initial_seed
+                    st.session_state.app_state["redraw_count"] = 0
+
+            except Exception as e:
+                st.error(f"생성 실패: {e}")
+
+# =============================================
+# 결과 생성 완료 시: 실시간 인터랙션 화면
+# =============================================
+state = st.session_state.app_state
+
+if state["is_ready"]:
+    st.write("---")
+
+    st.markdown("#### 💡 AI 추천 후킹 카피 (클릭 시 즉시 변경)")
+    cols_btn = st.columns(len(state["copies"]))
+    for idx, c_text in enumerate(state["copies"]):
+        with cols_btn[idx]:
+            if st.button(f"카피 {idx + 1}", key=f"copy_btn_{idx}", use_container_width=True):
+                state["active_title"] = c_text
+                st.rerun()
+
+    active_bg_img = None
+    if state["current_image_source"] == "ai" and len(state["ai_generated_images"]) > 0:
+        active_bg_img = state["ai_generated_images"][0]
+        badge_desc = f"🤖 기사 맞춤 AI 비주얼 ({state['redraw_count'] + 1}회차)"
+    elif state["article_images"] and state["current_img_idx"] < len(state["article_images"]):
+        active_bg_img = state["article_images"][state["current_img_idx"]]
+        badge_desc = f"📰 기사 원문 사진 ({state['current_img_idx'] + 1}/{len(state['article_images'])})"
+    else:
+        active_bg_img = Image.new("RGB", (1080, 1350), color=(15, 23, 42))
+        badge_desc = "🖼️ 맞춤 비주얼"
+
+    rendered_img = render_single_card(
+        state["active_title"],
+        state["active_sub"],
+        active_bg_img,
+        state["title_size"],
+        state["content_size"],
+        state["text_y"]
+    )
+
+    st.image(
+        rendered_img, 
+        caption=f"📱 완성된 인스타그램 피드 (1080x1350) · {badge_desc}", 
+        use_container_width=True
+    )
+
+    col_img1, col_img2 = st.columns(2)
+    with col_img1:
+        if st.button("🎨 AI로 다른 이미지 다시 그리기", key=f"btn_redraw_main_{state['redraw_count']}", use_container_width=True):
+            state["redraw_count"] += 1
+            new_seed = random.randint(10000, 999999) + state["redraw_count"] * 100
+            
+            with st.spinner(f"기사 내용에 맞는 새 비주얼을 그리고 있습니다... ({state['redraw_count'] + 1}회차)"):
+                new_ai_img = generate_contextual_ai_image(state["image_prompt"], seed_val=new_seed)
+                state["ai_generated_images"] = [new_ai_img.copy()]
+                state["current_image_source"] = "ai"
+                state["seed"] = new_seed
+            
+            st.rerun()
+
+    with col_img2:
+        if state["article_images"]:
+            if st.button("📰 기사 원문 실물 사진으로 전환", use_container_width=True):
+                state["current_image_source"] = "article"
+                state["current_img_idx"] = (state["current_img_idx"] + 1) % len(state["article_images"])
+                st.rerun()
+        else:
+            st.button("📰 기사 원문 사진 없음", disabled=True, use_container_width=True)
+
+    with st.expander("🛠️ 문구 직접 수정 & 글자 크기/위치 조절 (커스터마이징)"):
+        col_ed1, col_ed2 = st.columns(2)
+        with col_ed1:
+            new_title = st.text_input("제목 문구 수정", value=state["active_title"])
+            if new_title != state["active_title"]:
+                state["active_title"] = new_title
+                st.rerun()
+        with col_ed2:
+            new_sub = st.text_area("본문 문구 수정", value=state["active_sub"], height=70)
+            if new_sub != state["active_sub"]:
+                state["active_sub"] = new_sub
+                st.rerun()
+
+        col_sl1, col_sl2, col_sl3 = st.columns(3)
+        with col_sl1:
+            state["title_size"] = st.slider("제목 글자 크기", 42, 64, state["title_size"], step=2)
+        with col_sl2:
+            state["content_size"] = st.slider("본문 글자 크기", 22, 34, state["content_size"], step=2)
+        with col_sl3:
+            state["text_y"] = st.slider("텍스트 높이 위치", 700, 1000, state["text_y"], step=10)
+
+    buf = BytesIO()
+    rendered_img.save(buf, format="PNG")
+    st.download_button(
+        label="📥 완성된 카드 이미지 저장하기 (1080x1350)",
+        data=buf.getvalue(),
+        file_name=f"instagram_feed_{datetime.now().strftime('%H%M%S')}.png",
+        mime="image/png",
+        use_container_width=True
+    )
+
+    st.write("---")
+
+    st.markdown("#### 📝 인스타그램 본문 캡션 선택 (기사 팩트 반영)")
+    tab_empathy, tab_vote, tab_explain = st.tabs(["❤️ 공감형", "🗳️ 투표형 (찬반)", "📑 정보 설명형 (요약)"])
+
+    caps = state["captions"]
+    with tab_empathy:
+        st.text_area("공감형 캡션 (복사해서 인스타에 붙여넣으세요)", value=caps.get("empathy", ""), height=170)
+    with tab_vote:
+        st.text_area("투표형 캡션 (댓글 토론 유도)", value=caps.get("vote", ""), height=170)
+    with tab_explain:
+        st.text_area("설명형 캡션 (핵심 요약 & 저장 유도)", value=caps.get("explain", ""), height=170)
