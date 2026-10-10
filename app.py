@@ -199,7 +199,7 @@ class ContentSummaryResponse(BaseModel):
     vote: str
     explain: str
 
-PRIMARY_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
+PRIMARY_MODELS = ["gemini-3.8-flash", "gemini-2.5-flash"]
 
 # =============================================
 # AI 후킹 카피 & 실제 팩트 기반 요약 엔진
