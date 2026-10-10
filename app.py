@@ -101,6 +101,27 @@ def sanitize_korean_text(text):
     return text.strip()
 
 # =============================================
+# 어절 단위 지능형 자연스러운 줄바꿈 엔진 (Word-wrap)
+# =============================================
+def wrap_natural_korean(text, max_chars_per_line=13):
+    words = text.split()
+    lines = []
+    current_line = ""
+
+    for word in words:
+        if len(current_line + word) > max_chars_per_line:
+            if current_line.strip():
+                lines.append(current_line.strip())
+            current_line = word + " "
+        else:
+            current_line += word + " "
+
+    if current_line.strip():
+        lines.append(current_line.strip())
+    
+    return lines
+
+# =============================================
 # 피사체 보호 프레이밍 엔진 (1080x1350)
 # =============================================
 def smart_fit_or_crop(base_img, target_w=1080, target_h=1350):
@@ -162,7 +183,7 @@ def download_image_pil(img_url):
     return None
 
 # =============================================
-# 기사 내용 100% 일치 AI 이미지 생성기
+# 기사 내용 100% 일치 AI 이미지 생성기 (다중 생성 최적화)
 # =============================================
 def generate_contextual_ai_image(prompt_text, seed_val=42, fallback_photo=None):
     clean_prompt = re.sub(r'[^a-zA-Z0-9\s,]', '', prompt_text).strip()
@@ -172,6 +193,7 @@ def generate_contextual_ai_image(prompt_text, seed_val=42, fallback_photo=None):
     enhanced_prompt = f"{clean_prompt}, clean dark studio background, professional product photography, 8k, dramatic lighting"
     encoded_prompt = urllib.parse.quote(enhanced_prompt)
 
+    # 매 시도마다 시드가 정상 반영되도록 URL에 시드 캐싱 매개변수 바인딩
     urls = [
         f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val}&model=turbo&nologo=true",
         f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val}&nologo=true"
@@ -297,56 +319,60 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
     card = Image.alpha_composite(base_img, gradient).convert("RGB")
     draw = ImageDraw.Draw(card)
 
-    # [디자인 미감 개선] 제공 이미지와 동일한 Pill 알약형 TREND ISSUE 뱃지
+    # ----------------------------------------------------
+    # [NEW] 극도로 고급스러운 유리 글래스모피즘(Glassmorphism) 뱃지 구현
+    # ----------------------------------------------------
     badge_x, badge_y = 64, 64
-    badge_w, badge_h = 216, 52
-    badge_radius = 26  # 완전한 라운드 알약 형태
+    badge_w, badge_h = 224, 54
+    badge_radius = 27
 
-    # 뱃지 배경 및 섬세한 반투명 테두리
-    draw.rounded_rectangle(
+    # ① 기본 딥네이비/옵시디언 반투명 레이어
+    badge_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    b_draw = ImageDraw.Draw(badge_layer)
+    b_draw.rounded_rectangle(
         [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
         radius=badge_radius,
-        fill=(11, 19, 32)
+        fill=(10, 18, 30, 200) # 촉촉한 깊은 반투명
     )
-    draw.rounded_rectangle(
+
+    # ② 글래스 아웃라인: 상단의 빛이 닿는 곳은 희미하고 얇게, 하단은 투명하게 (그림판 느낌 100% 제거)
+    for i in range(2): # 이중 중첩을 통한 은은한 광택 효과
+        b_draw.rounded_rectangle(
+            [badge_x - i, badge_y - i, badge_x + badge_w + i, badge_y + badge_h + i],
+            radius=badge_radius + i,
+            outline=(255, 255, 255, int(45 - i * 15)),
+            width=1
+        )
+    # 뱃지 밑부분 자연스러운 딥한 이중 섀도우 처리
+    b_draw.rounded_rectangle(
         [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
         radius=badge_radius,
-        outline=(255, 255, 255, 60),
-        width=1
+        outline=(15, 25, 40, 90),
+        width=2
     )
 
-    # 뱃지 내부 옐로우 포인트 점 (제공 이미지 스타일)
-    dot_cx, dot_cy, dot_r = badge_x + 24, badge_y + 26, 4
-    draw.ellipse([dot_cx - dot_r, dot_cy - dot_r, dot_cx + dot_r, dot_cy + dot_r], fill=(250, 204, 21))
+    card = Image.alpha_composite(card.convert("RGBA"), badge_layer).convert("RGB")
+    draw = ImageDraw.Draw(card)
 
-    # 뱃지 영문 텍스트
-    draw.text((badge_x + 38, badge_y + 13), "TREND ISSUE", font=b_font, fill=(248, 250, 252))
+    # ③ 뱃지 내부 옐로우 포인트 점 (실물과 같은 둥근 소프트 필)
+    dot_cx, dot_cy, dot_r = badge_x + 24, badge_y + 27, 4
+    draw.ellipse([dot_cx - dot_r, dot_cy - dot_r, dot_cx + dot_r, dot_cy + dot_r], fill=(251, 191, 36)) # 선명한 금색 노란색
 
-    # 제목 텍스트 (어절 줄바꿈)
-    t_words = title_text.split()
-    t_lines, curr = [], ""
-    for w in t_words:
-        if len(curr + w) > 13:
-            if curr.strip(): t_lines.append(curr.strip())
-            curr = w + " "
-        else:
-            curr += w + " "
-    if curr.strip(): t_lines.append(curr.strip())
+    # ④ 뱃지 영문 텍스트 (글래스 반사에 어울리는 약간 얇고 세련된 노출)
+    draw.text((badge_x + 40, badge_y + 14), "TREND ISSUE", font=b_font, fill=(241, 245, 249, 235))
 
-    # 본문 텍스트 (가독성 기준 20자 내외 줄바꿈)
-    c_words = sub_text.split()
-    c_lines, curr = [], ""
-    for w in c_words:
-        if len(curr + w) > 20:
-            if curr.strip(): c_lines.append(curr.strip())
-            curr = w + " "
-        else:
-            curr += w + " "
-    if curr.strip(): c_lines.append(curr.strip())
+    # ----------------------------------------------------
+    # 어절 및 품사 형태소 단위의 '자연스러운' 제목/본문 조판 엔진
+    # ----------------------------------------------------
+    # 제목: 12~14자 한도 내 자연스러운 줄바꿈
+    t_lines = wrap_natural_korean(title_text, max_chars_per_line=13)
+
+    # 본문: 18~21자 한도 내 자연스러운 줄바꿈 (30px 폰트 확대 대응)
+    c_lines = wrap_natural_korean(sub_text, max_chars_per_line=19)
 
     curr_y = text_y_pos
-    # 제목 상단 옐로우 악센트 미니바
-    draw.rounded_rectangle([64, curr_y - 20, 114, curr_y - 13], radius=4, fill=(250, 204, 21))
+    # 제목 상단 옐로우 악센트 미니바 (시각적 일관성)
+    draw.rounded_rectangle([64, curr_y - 20, 114, curr_y - 13], radius=4, fill=(251, 191, 36))
 
     # 제목 출력
     for l in t_lines:
@@ -359,7 +385,7 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
         draw.text((64, curr_y), l, font=c_font, fill=(226, 232, 240))
         curr_y += content_size + 14
 
-    # 하단 엣지 라인
+    # 하단 엣지 라인 (옆으로 넘기기 텍스트 제외)
     draw.line([64, 1260, 1016, 1260], fill=(51, 65, 85, 140), width=2)
 
     return card
@@ -415,11 +441,14 @@ if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_
                             p = download_image_pil(u)
                             if p: art_img_pool.append(p)
 
+                    if not art_img_pool:
+                        art_img_pool = [Image.new("RGB", (1080, 1350), color=(15, 23, 42))]
+
                     # 1회 통합 호출로 콘텐츠 생성
                     ai_result = generate_all_card_content(art.title, art.text)
                     
                     fallback_base = art_img_pool[0] if art_img_pool else None
-                    initial_seed = int(time.time()) % 1000
+                    initial_seed = random.randint(1001, 99999) # 시작 시점부터 완벽한 동적 랜덤 시드 주입
                     ai_img = generate_contextual_ai_image(ai_result["image_prompt"], seed_val=initial_seed, fallback_photo=fallback_base)
 
                     st.session_state.app_state["is_ready"] = True
@@ -480,16 +509,22 @@ if state["is_ready"]:
 
     st.image(rendered_img, caption=f"📱 완성된 인스타그램 피드 (1080x1350) · {badge_desc}", use_container_width=True)
 
-    # 이미지 컨트롤 (다시 그리기 / 원문 전환)
+    # [수정] 무한 다시 그리기 컨트롤 (클릭할 때마다 다른 새로운 이미지 생성 보장)
     col_img1, col_img2 = st.columns(2)
     with col_img1:
         if st.button("🎨 AI로 다른 이미지 다시 그리기", use_container_width=True):
+            # 클릭이 인지될 때마다 중복 없는 새로운 시드를 강제로 할당
             new_seed = random.randint(1001, 99999)
             fallback_base = state["article_images"][0] if state["article_images"] else None
-            new_ai_img = generate_contextual_ai_image(state["image_prompt"], seed_val=new_seed, fallback_photo=fallback_base)
-            state["ai_generated_images"] = [new_ai_img]
-            state["current_image_source"] = "ai"
-            state["seed"] = new_seed
+            
+            # 컴포넌트 렌더링 스피너 처리와 함께 완전히 새로운 이미지 Fetching
+            with st.spinner("새로운 시드와 스타일로 이미지를 다시 생성하고 있습니다..."):
+                new_ai_img = generate_contextual_ai_image(state["image_prompt"], seed_val=new_seed, fallback_photo=fallback_base)
+                state["ai_generated_images"] = [new_ai_img]
+                state["current_image_source"] = "ai"
+                state["seed"] = new_seed
+            
+            # 세션 갱신을 통해 UI 즉각 Force Rerun
             st.rerun()
 
     with col_img2:
