@@ -186,14 +186,10 @@ def download_image_pil(img_url):
 # [개선] 100% 무한 갱신 보장 AI 이미지 생성 파이프라인
 # =============================================
 def generate_contextual_ai_image(prompt_text, seed_val=42):
-    """
-    무작위 자연/풍경 사이트를 완전히 배제하고, 무한히 계속해서 새로운 기사 맞춤형 AI 이미지를 그립니다.
-    """
     clean_prompt = re.sub(r'[^a-zA-Z0-9\s,]', '', prompt_text).strip()
     if not clean_prompt:
         clean_prompt = "flagship tech product documentary scene"
     
-    # 4회차 이상 넘어가도 계속 변형을 줄 수 있도록 dynamic 파라미터 매치
     visual_styles = [
         "cinematic lighting, ultra-realistic, 8k, professional photography, dramatic shadows, highly detailed",
         "studio product shot, ultra sharp details, dark background, photorealistic 8k, Award Winning photo",
@@ -204,10 +200,8 @@ def generate_contextual_ai_image(prompt_text, seed_val=42):
     enhanced_prompt = f"{clean_prompt}, {selected_style}"
     encoded_prompt = urllib.parse.quote(enhanced_prompt)
 
-    # 400ms 단위 실시간 타임스탬프와 난수를 곱해 API 캐싱 파쇄
     ts = int(time.time() * 1000) + random.randint(100, 999)
 
-    # Pollinations 다변화 모델 엔드포인트 세트 (캐시 버스터 t 파라미터 포함)
     candidate_urls = [
         f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val}&model=turbo&nologo=true&t={ts}",
         f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1350&seed={seed_val + 52}&nologo=true&t={ts + 1}",
@@ -222,7 +216,6 @@ def generate_contextual_ai_image(prompt_text, seed_val=42):
         "Expires": "0"
     }
 
-    # 후보 AI 생성 URL을 돌며 응답 확보 시도
     for u in candidate_urls:
         try:
             res = requests.get(u, headers=headers, timeout=12)
@@ -233,7 +226,6 @@ def generate_contextual_ai_image(prompt_text, seed_val=42):
         except Exception:
             continue
 
-    # 폴백 안전망 (어떠한 빽업 풍경/자연 사진도 거부, 럭셔리 다크 플레이트 생성)
     base = Image.new("RGB", (1080, 1350), color=(15, 23, 42))
     draw = ImageDraw.Draw(base)
     for y in range(0, 1350):
@@ -461,7 +453,7 @@ if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_
                         "explain": ai_result["explain"]
                     }
                     st.session_state.app_state["article_images"] = art_img_pool
-                    st.session_state.app_state["ai_generated_images"] = [ai_img] # 주소값 독립화
+                    st.session_state.app_state["ai_generated_images"] = [ai_img]
                     st.session_state.app_state["current_image_source"] = "ai"
                     st.session_state.app_state["current_img_idx"] = 0
                     st.session_state.app_state["seed"] = initial_seed
@@ -486,7 +478,6 @@ if state["is_ready"]:
                 state["active_title"] = c_text
                 st.rerun()
 
-    # 이미지 소스 분기 및 뷰 캡션 유동 키 할당 (UI 캐싱 완전 차단용)
     active_bg_img = None
     if state["current_image_source"] == "ai" and len(state["ai_generated_images"]) > 0:
         active_bg_img = state["ai_generated_images"][0]
@@ -507,8 +498,6 @@ if state["is_ready"]:
         state["text_y"]
     )
 
-    # [수정 완료] 예기치 못한 TypeError를 차단하기 위해 st.image()의 key 인자를 제거
-    # 대신 런타임에 rendered_img 객체 변경 및 badge_desc 캡션 갱신을 통해 UI가 안전하게 재조사되도록 세팅
     st.image(
         rendered_img, 
         caption=f"📱 완성된 인스타그램 피드 (1080x1350) · {badge_desc}", 
@@ -517,18 +506,13 @@ if state["is_ready"]:
 
     col_img1, col_img2 = st.columns(2)
     with col_img1:
-        # 버튼에 count 결합 및 클릭 시 action 함수에서 세션 메모리 오버라이드
         if st.button("🎨 AI로 다른 이미지 다시 그리기", key=f"btn_redraw_main_{state['redraw_count']}", use_container_width=True):
             state["redraw_count"] += 1
-            # 매 횟수마다 겹침 없는 극한의 난수 + 카운터 곱
             new_seed = int(time.time() * 100) + random.randint(1000, 9999) + state["redraw_count"] * 142
             
-            with st.spinner(f"기사 내용에 맞는 새 비주얼을 그리고 있습니다... (새 이미지 생성 중)"):
-                # 생성 파이프라인에서 무조건 생성된 Image 객체를 직접 받아와 리스트로 신규 주입
+            with st.spinner("기사 내용에 맞는 새 비주얼을 그리고 있습니다... (새 이미지 생성 중)"):
                 new_ai_img = generate_contextual_ai_image(state["image_prompt"], seed_val=new_seed)
-                
-                # 세션 상태를 이전 값을 참조하지 않도록 완전히 새로 독립 교체
-                state["ai_generated_images"] = [new_ai_img.copy()] # 복사본 생성으로 메모리 주소 격리
+                state["ai_generated_images"] = [new_ai_img.copy()]
                 state["current_image_source"] = "ai"
                 state["seed"] = new_seed
             
@@ -552,4 +536,37 @@ if state["is_ready"]:
                 st.rerun()
         with col_ed2:
             new_sub = st.text_area("본문 문구 수정", value=state["active_sub"], height=70)
-            if new_sub != state
+            if new_sub != state["active_sub"]:
+                state["active_sub"] = new_sub
+                st.rerun()
+
+        col_sl1, col_sl2, col_sl3 = st.columns(3)
+        with col_sl1:
+            state["title_size"] = st.slider("제목 글자 크기", 42, 64, state["title_size"], step=2)
+        with col_sl2:
+            state["content_size"] = st.slider("본문 글자 크기", 22, 34, state["content_size"], step=2)
+        with col_sl3:
+            state["text_y"] = st.slider("텍스트 높이 위치", 700, 1000, state["text_y"], step=10)
+
+    buf = BytesIO()
+    rendered_img.save(buf, format="PNG")
+    st.download_button(
+        label="📥 완성된 카드 이미지 저장하기 (1080x1350)",
+        data=buf.getvalue(),
+        file_name=f"instagram_feed_{datetime.now().strftime('%H%M%S')}.png",
+        mime="image/png",
+        use_container_width=True
+    )
+
+    st.write("---")
+
+    st.markdown("#### 📝 인스타그램 본문 캡션 선택 (기사 팩트 반영)")
+    tab_empathy, tab_vote, tab_explain = st.tabs(["❤️ 공감형", "🗳️ 투표형 (찬반)", "📑 정보 설명형 (요약)"])
+
+    caps = state["captions"]
+    with tab_empathy:
+        st.text_area("공감형 캡션 (복사해서 인스타에 붙여넣으세요)", value=caps.get("empathy", ""), height=170)
+    with tab_vote:
+        st.text_area("투표형 캡션 (댓글 토론 유도)", value=caps.get("vote", ""), height=170)
+    with tab_explain:
+        st.text_area("설명형 캡션 (핵심 요약 & 저장 유도)", value=caps.get("explain", ""), height=170)
