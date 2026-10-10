@@ -62,7 +62,7 @@ def load_fonts(t_sz, c_sz):
     for f_path in font_candidates_bold:
         try:
             title_font = ImageFont.truetype(f_path, t_sz)
-            badge_font = ImageFont.truetype(f_path, 22)
+            badge_font = ImageFont.truetype(f_path, 21)
             break
         except Exception:
             continue
@@ -252,7 +252,7 @@ def generate_contextual_ai_image(prompt_text, seed_val=42):
     selected_style = variations[seed_val % len(variations)]
     final_prompt = f"{clean_prompt}, {selected_style}"
 
-    # 1순위: Google Imagen 3 (보유 계정 쿼터가 허용될 경우 우선)
+    # 1순위: Google Imagen 3 (보유 계정 쿼터 허용 시 우선)
     if client:
         for m_name in ['imagen-3.0-generate-002', 'imagen-3.0-generate-001']:
             try:
@@ -276,10 +276,10 @@ def generate_contextual_ai_image(prompt_text, seed_val=42):
     ts = int(time.time() * 1000)
     
     endpoints = [
-        f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded}?width=640&height=800&seed={seed_val}&model=turbo&nologo=true&t={ts}",
-        f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded}?width=640&height=800&seed={seed_val + 177}&nologo=true&t={ts + 1}",
-        f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded}?width=640&height=800&seed={seed_val + 491}&model=flux&nologo=true&t={ts + 2}",
-        f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded}?width=512&height=640&seed={seed_val + 999}&model=turbo&nologo=true&t={ts + 3}"
+        f"https://image.pollinations.ai/prompt/{encoded}?width=640&height=800&seed={seed_val}&model=turbo&nologo=true&t={ts}",
+        f"https://image.pollinations.ai/prompt/{encoded}?width=640&height=800&seed={seed_val + 177}&nologo=true&t={ts + 1}",
+        f"https://image.pollinations.ai/prompt/{encoded}?width=640&height=800&seed={seed_val + 491}&model=flux&nologo=true&t={ts + 2}",
+        f"https://image.pollinations.ai/prompt/{encoded}?width=512&height=640&seed={seed_val + 999}&model=turbo&nologo=true&t={ts + 3}"
     ]
 
     for ep in endpoints:
@@ -301,12 +301,12 @@ def generate_contextual_ai_image(prompt_text, seed_val=42):
         except Exception:
             continue
 
-    # 3순위: 기사 영문 키워드 다이렉트 에디토리얼 실사 풀 (절대 원문 사진 도용 없음)
+    # 3순위: 기사 키워드 기반 실사 에디토리얼 풀
     keywords = [w for w in clean_prompt.split() if len(w) > 3][:3]
     search_q = ",".join(keywords) if keywords else "modern,editorial"
     editorial_urls = [
-        f"[https://loremflickr.com/1080/1350/](https://loremflickr.com/1080/1350/){urllib.parse.quote(search_q)}?lock={seed_val % 9999}",
-        f"[https://source.unsplash.com/1080x1350/](https://source.unsplash.com/1080x1350/)?{urllib.parse.quote(search_q)}&sig={seed_val % 500}"
+        f"https://loremflickr.com/1080/1350/{urllib.parse.quote(search_q)}?lock={seed_val % 9999}",
+        f"https://source.unsplash.com/1080x1350/?{urllib.parse.quote(search_q)}&sig={seed_val % 500}"
     ]
     for e_url in editorial_urls:
         try:
@@ -318,7 +318,6 @@ def generate_contextual_ai_image(prompt_text, seed_val=42):
         except Exception:
             continue
 
-    # 폴백: 기사 원문 사진을 절대 사용하지 않고 고급 다크 캔버스 생성
     base = Image.new("RGB", (1080, 1350), color=(15, 23, 42))
     draw = ImageDraw.Draw(base)
     for y in range(0, 1350):
@@ -330,11 +329,12 @@ def generate_contextual_ai_image(prompt_text, seed_val=42):
     return base
 
 # =============================================
-# Pydantic 모델 & 1회 통합 호출 엔진
+# Pydantic 모델 & [피드 진단 피드백 반영] 프롬프트 엔진
 # =============================================
 class UnifiedCardNewsResponse(BaseModel):
-    titles: List[str]
-    card_subcopy: str
+    category: str           # NEWS, CULTURE, TREND 중 1개 자동 판별
+    titles: List[str]       # 모바일 3x3 그리드용 짧고 강렬한 제목 5개
+    card_subcopy: str       # 팩트 1줄 + 독자 영향/맥락 1줄
     image_prompt: str
     empathy: str
     vote: str
@@ -348,20 +348,26 @@ def generate_all_card_content(title, text):
         raise Exception("Gemini API Key가 설정되지 않았습니다. 상단 API Key 설정창에 키를 입력해 주세요.")
 
     prompt = f"""
-    당신은 SNS 시사/트렌드 뉴스 전문 에디터입니다.
-    아래 기사의 실제 분야(스마트폰, IT, 부동산, 정치, 사회, 경제, 연예 등)의 사건 팩트에 부합하는 콘텐츠 세트를 작성하세요.
+    당신은 인스타그램 트렌드 뉴스 미디어 '트랜디 라이프'의 수석 에디터입니다.
+    피드 진단 원칙에 입각하여 독자의 스크롤을 멈추고 저장을 유도하는 카드뉴스를 기획하세요.
 
-    [필수 작성 규칙]:
-    1. titles: 독자의 스크롤을 멈추게 하는 강력한 후킹 제목 5개 (1줄당 14~20자 내외, 대괄호 [] 제외).
-    2. card_subcopy: 피드 1장 카드에 들어갈 본문 요약 (공백 포함 65~80자 내외, 정확히 2개의 완결된 문장).
-       - 중요: 줄바꿈 시 문맥이 깨지지 않도록 간결하고 명확한 2문장으로만 서술하세요. 끝에 '조명합니다', '살펴봅니다' 같은 상투적인 사족을 덧붙이지 마세요.
-    3. image_prompt: 이 기사 내용에 정확히 들어맞는 영어 이미지 프롬프트.
-       - 고급 빌라/부동산 기사면: 'modern luxury penthouse villa exterior architectural photography cinematic lighting 8k'
-       - 스마트폰/IT 기사면: 'modern flagship smartphone device screen display product photography dark background 8k'
-       - 교통사고/사건 기사면: 'car accident investigation road traffic police scene dramatic documentary lighting'
-    4. empathy: 기사의 실제 팩트를 설명하고 의견을 나누는 공감형 인스타 본문.
-    5. vote: 기사의 쟁점을 바탕으로 한 찬반(A vs B) 투표형 인스타 본문.
-    6. explain: 기사의 핵심 팩트 3줄 요약 인스타 본문.
+    [작성 규칙]:
+    1. category: 기사 성격에 따라 다음 3가지 중 1가지를 정확히 지정하세요:
+       - 'NEWS': 사회, 사건사고, 경제, 정책, 법률, 소비자 피해, 제도 변화 (비중 50%)
+       - 'CULTURE': 연예, 셀럽, 방송/드라마, 인터넷 화제, 대중문화 (비중 30%)
+       - 'TREND': 라이프스타일, 여행, 건강, 소비 패턴, 핫플레이스 (비중 20%)
+
+    2. titles: 모바일 3x3 피드 그리드에서 한눈에 읽히는 강력한 제목 5개.
+       - 1줄당 9~13자 내외, 최대 2줄로 매우 짧고 명확하게 핵심만 타격 (대괄호 [] 제외).
+
+    3. card_subcopy: 카드 표지 하단 요약 (공백 포함 60~75자, 정확히 2문장).
+       - 1문장: 무슨 일이 일어났는지 핵심 팩트 요약.
+       - 2문장: [독자가 알아야 할 배경, 영향, 또는 주의할 점] 1줄 추가. (단순 사건 나열 금지)
+
+    4. image_prompt: 기사 맥락에 정확히 일치하는 고화질 영문 이미지 프롬프트.
+    5. empathy: 팩트와 함께 독자의 생각/의견을 묻는 인스타 본문 캡션.
+    6. vote: 독자 참여를 유도하는 찬반(A vs B) 투표형 인스타 본문 캡션.
+    7. explain: 핵심 요약과 함께 저장(북마크)을 유도하는 정보형 인스타 본문 캡션.
 
     기사 제목: {clean_t}
     기사 본문 내용:
@@ -381,10 +387,15 @@ def generate_all_card_content(title, text):
                 )
             )
             data = json.loads(res.text)
+            cat = str(data.get("category", "NEWS")).strip().upper()
+            if cat not in ["NEWS", "CULTURE", "TREND"]:
+                cat = "NEWS"
+
             return {
+                "category": cat,
                 "titles": [sanitize_korean_text(t) for t in data.get("titles", [])][:5],
                 "card_subcopy": sanitize_korean_text(data.get("card_subcopy", "")),
-                "image_prompt": data.get("image_prompt", "luxury penthouse villa architectural photography"),
+                "image_prompt": data.get("image_prompt", "modern architectural visual"),
                 "empathy": data.get("empathy", ""),
                 "vote": data.get("vote", ""),
                 "explain": data.get("explain", "")
@@ -396,9 +407,9 @@ def generate_all_card_content(title, text):
     raise Exception(f"AI 생성 실패: {last_err}")
 
 # =============================================
-# 단일 카드 렌더링 엔진 (수동 줄바꿈 지원)
+# 단일 카드 렌더링 엔진 (동적 카테고리 뱃지 탑재)
 # =============================================
-def render_single_card(title_text, sub_text, base_img, title_size, content_size, text_y_pos):
+def render_single_card(title_text, sub_text, base_img, title_size, content_size, text_y_pos, category_text="NEWS"):
     width, height = 1080, 1350
     t_font, c_font, b_font = load_fonts(title_size, content_size)
 
@@ -423,9 +434,12 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
     card = Image.alpha_composite(base_img, gradient).convert("RGB")
     draw = ImageDraw.Draw(card)
 
+    # 카테고리 뱃지 글자 길이에 따른 너비 유동 계산
+    badge_label = category_text.strip().upper()
     badge_x, badge_y = 64, 64
-    badge_w, badge_h = 224, 54
-    badge_radius = 27
+    badge_w = 175 if len(badge_label) <= 5 else (210 if len(badge_label) <= 7 else 230)
+    badge_h = 52
+    badge_radius = 26
 
     badge_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     b_draw = ImageDraw.Draw(badge_layer)
@@ -452,9 +466,10 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
     card = Image.alpha_composite(card.convert("RGBA"), badge_layer).convert("RGB")
     draw = ImageDraw.Draw(card)
 
-    dot_cx, dot_cy, dot_r = badge_x + 24, badge_y + 27, 4
+    # 옐로우 포인트 점 + 동적 카테고리 영문
+    dot_cx, dot_cy, dot_r = badge_x + 22, badge_y + 26, 4
     draw.ellipse([dot_cx - dot_r, dot_cy - dot_r, dot_cx + dot_r, dot_cy + dot_r], fill=(251, 191, 36))
-    draw.text((badge_x + 40, badge_y + 14), "TREND ISSUE", font=b_font, fill=(241, 245, 249, 235))
+    draw.text((badge_x + 36, badge_y + 13), badge_label, font=b_font, fill=(241, 245, 249, 235))
 
     t_lines = format_text_lines(title_text, wrap_natural_korean, max_chars_per_line=13)
     c_lines = format_text_lines(sub_text, wrap_korean_balanced, max_chars_per_line=21)
@@ -475,24 +490,25 @@ def render_single_card(title_text, sub_text, base_img, title_size, content_size,
     return card
 
 # =============================================
-# 세션 상태 관리 (히스토리 인덱스 추가)
+# 세션 상태 관리
 # =============================================
 if "app_state" not in st.session_state:
     st.session_state.app_state = {
         "is_ready": False,
+        "category": "NEWS",
         "copies": [],
         "active_title": "",
         "active_sub": "",
         "captions": {},
         "article_images": [],
-        "ai_image_history": [],  # 생성된 모든 AI 이미지 히스토리 리스트
-        "history_idx": 0,         # 현재 보고 있는 AI 이미지 인덱스
+        "ai_image_history": [],
+        "history_idx": 0,
         "current_image_source": "ai",
         "current_img_idx": 0,
         "title_size": 54,
         "content_size": 30,
         "text_y": 860,
-        "image_prompt": "modern luxury penthouse villa exterior architectural photography",
+        "image_prompt": "modern luxury architectural photography",
         "seed": 42,
         "redraw_count": 0
     }
@@ -501,7 +517,7 @@ if "app_state" not in st.session_state:
 # 메인 화면 UI
 # =============================================
 st.markdown("<h2 style='text-align: center; margin-bottom: 5px;'>🚀 인스타 단일 피드 카드뉴스 생성기</h2>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #64748B; margin-bottom: 25px;'>기사 링크만 넣으면 기사 내용에 일치하는 비주얼과 팩트 요약으로 완성합니다</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #64748B; margin-bottom: 25px;'>트랜디 라이프 피드 규격(NEWS·CULTURE·TREND) 기반 자동화</p>", unsafe_allow_html=True)
 
 news_url = st.text_input("🔗 뉴스 기사 링크 입력", placeholder="네이버/다음 등 포털 뉴스 기사 링크를 붙여넣으세요")
 
@@ -536,6 +552,7 @@ if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_
                     ai_img = generate_contextual_ai_image(ai_result["image_prompt"], seed_val=initial_seed)
 
                     st.session_state.app_state["is_ready"] = True
+                    st.session_state.app_state["category"] = ai_result["category"]
                     st.session_state.app_state["copies"] = ai_result["titles"]
                     st.session_state.app_state["active_title"] = ai_result["titles"][0]
                     st.session_state.app_state["active_sub"] = ai_result["card_subcopy"]
@@ -546,7 +563,7 @@ if st.button("✨ 인스타 게시물 만들기", type="primary", use_container_
                         "explain": ai_result["explain"]
                     }
                     st.session_state.app_state["article_images"] = art_img_pool
-                    st.session_state.app_state["ai_image_history"] = [ai_img]  # 히스토리 1번째 저장
+                    st.session_state.app_state["ai_image_history"] = [ai_img]
                     st.session_state.app_state["history_idx"] = 0
                     st.session_state.app_state["current_image_source"] = "ai"
                     st.session_state.app_state["current_img_idx"] = 0
@@ -564,11 +581,12 @@ state = st.session_state.app_state
 if state["is_ready"]:
     st.write("---")
 
-    st.markdown("#### 💡 AI 추천 후킹 카피 (클릭 시 즉시 변경)")
+    # 1. AI 추천 후킹 카피 선택 (모바일 그리드형)
+    st.markdown("#### 💡 AI 추천 후킹 제목 (클릭 시 즉시 변경)")
     cols_btn = st.columns(len(state["copies"]))
     for idx, c_text in enumerate(state["copies"]):
         with cols_btn[idx]:
-            if st.button(f"카피 {idx + 1}", key=f"copy_btn_{idx}", use_container_width=True):
+            if st.button(f"제목 {idx + 1}", key=f"copy_btn_{idx}", use_container_width=True):
                 state["active_title"] = c_text
                 st.rerun()
 
@@ -577,7 +595,7 @@ if state["is_ready"]:
     if state["current_image_source"] == "ai" and hist_len > 0:
         h_idx = state["history_idx"]
         active_bg_img = state["ai_image_history"][h_idx]
-        badge_desc = f"🤖 AI 생성 비주얼 ({h_idx + 1}/{hist_len}번째 이미지)"
+        badge_desc = f"🤖 AI 생성 비주얼 ({h_idx + 1}/{hist_len}번째 기록)"
     elif state["article_images"] and state["current_img_idx"] < len(state["article_images"]):
         active_bg_img = state["article_images"][state["current_img_idx"]]
         badge_desc = f"📰 기사 원문 사진 ({state['current_img_idx'] + 1}/{len(state['article_images'])})"
@@ -591,16 +609,17 @@ if state["is_ready"]:
         active_bg_img,
         state["title_size"],
         state["content_size"],
-        state["text_y"]
+        state["text_y"],
+        category_text=state["category"]
     )
 
     st.image(
         rendered_img, 
-        caption=f"📱 완성된 인스타그램 피드 (1080x1350) · {badge_desc}", 
+        caption=f"📱 완성된 인스타그램 피드 (1080x1350) · 뱃지: {state['category']} · {badge_desc}", 
         use_container_width=True
     )
 
-    # 1. AI 이미지 히스토리 탐색 컨트롤 (이전 생성 이미지로 돌아가기)
+    # 이전 생성 이미지로 돌아가기 컨트롤
     if hist_len > 1 and state["current_image_source"] == "ai":
         c_prev, c_info, c_next = st.columns([1, 2, 1])
         with c_prev:
@@ -614,16 +633,15 @@ if state["is_ready"]:
                 state["history_idx"] += 1
                 st.rerun()
 
-    # 2. 이미지 생성/전환 액션 버튼
+    # 이미지 생성/전환 액션 버튼
     col_img1, col_img2 = st.columns(2)
     with col_img1:
         if st.button("🎨 AI로 새로운 이미지 다시 그리기", key="btn_ai_redraw", use_container_width=True):
             state["redraw_count"] += 1
             new_seed = random.randint(10000, 999999) + state["redraw_count"] * 139
             
-            with st.spinner("기사 맞춤 AI 비주얼을 새롭게 생성하고 있습니다..."):
+            with st.spinner("새로운 AI 비주얼을 생성하고 있습니다..."):
                 new_ai_img = generate_contextual_ai_image(state["image_prompt"], seed_val=new_seed)
-                # 새로운 이미지를 히스토리에 누적 추가
                 state["ai_image_history"].append(new_ai_img)
                 state["history_idx"] = len(state["ai_image_history"]) - 1
                 state["current_image_source"] = "ai"
@@ -639,16 +657,24 @@ if state["is_ready"]:
         else:
             st.button("📰 기사 원문 사진 없음", disabled=True, use_container_width=True)
 
-    with st.expander("🛠️ 문구 직접 수정 & 줄바꿈/글자 크기/위치 조절 (커스터마이징)"):
+    # 커스터마이징 패널 (카테고리 뱃지 변경 + 줄바꿈 수정)
+    with st.expander("🛠️ 카테고리 뱃지 / 문구 줄바꿈 / 글자 크기 커스터마이징"):
+        cat_options = ["NEWS", "CULTURE", "TREND", "TREND ISSUE"]
+        curr_cat_idx = cat_options.index(state["category"]) if state["category"] in cat_options else 0
+        selected_cat = st.segmented_control("🏷️ 상단 뱃지 카테고리 선택", cat_options, default=cat_options[curr_cat_idx])
+        if selected_cat and selected_cat != state["category"]:
+            state["category"] = selected_cat
+            st.rerun()
+
         st.caption("💡 팁: 제목이나 본문 입력창에서 원하는 위치에 **엔터(줄바꿈)**를 치시면 입력하신 그대로 카드뉴스 줄바꿈이 적용됩니다.")
         col_ed1, col_ed2 = st.columns(2)
         with col_ed1:
-            new_title = st.text_area("제목 문구 수정 (엔터로 줄바꿈 지정 가능)", value=state["active_title"], height=90)
+            new_title = st.text_area("제목 문구 수정 (엔터로 줄바꿈 지정 가능)", value=state["active_title"], height=85)
             if new_title != state["active_title"]:
                 state["active_title"] = new_title
                 st.rerun()
         with col_ed2:
-            new_sub = st.text_area("본문 문구 수정 (엔터로 줄바꿈 지정 가능)", value=state["active_sub"], height=90)
+            new_sub = st.text_area("본문 문구 수정 (엔터로 줄바꿈 지정 가능)", value=state["active_sub"], height=85)
             if new_sub != state["active_sub"]:
                 state["active_sub"] = new_sub
                 st.rerun()
