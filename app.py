@@ -512,7 +512,7 @@ if state["is_ready"]:
     rendered_img.save(buf, format="PNG")
     st.download_button(
         label="📥 완성된 카드 이미지 저장하기 (1080x1350)",
-        data=buf.getvalue>,
+        data = buf.getvalue(),
         file_name=f"instagram_feed_{datetime.now().strftime('%H%M%S')}.png",
         mime="image/png",
         use_container_width=True
