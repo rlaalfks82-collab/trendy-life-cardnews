@@ -195,34 +195,50 @@ class ContentSummaryResponse(BaseModel):
 
 FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.8-flash", "gemini-3.1-pro-preview"]
 
+# =============================================
+# 강력한 후킹 카피 & 다이나믹 서브카피 생성 엔진
+# =============================================
 def generate_ai_copies(title, text):
     clean_t = sanitize_korean_text(title)
+    
+    # API 실패 시에도 매번 다르게 조합되는 고강도 후킹 템플릿 풀
+    random_fallbacks = [
+        f"\"이건 진짜 선 넘었죠\" 지금 난리 난 {clean_t[:12]} 실체",
+        f"절대 그냥 지나치면 안 되는 {clean_t[:14]} 결정적 이유",
+        f"방송 1회 만에 뒤집어진 {clean_t[:13]}... 도대체 왜?",
+        f"\"저 사람 누구야?\" 모두가 충격받은 {clean_t[:12]} 반전",
+        f"{clean_t[:14]} 아직도 모르면 대화에 못 낍니다",
+        f"\"결국 터질 게 터졌다\" 실시간 발칵 뒤집힌 현장",
+        f"단 3분 만에 여론 싹 바뀐 {clean_t[:13]} 결정적 장면",
+        f"\"이게 실화라고?\" 다들 경악하고 있는 {clean_t[:12]} 속사정"
+    ]
+
     if not client:
-        return [
-            f"'{clean_t[:16]}' 아직 모르시는 분들 꼭 보세요",
-            f"절대 '{clean_t[:16]}' 그냥 넘기지 마세요",
-            f"단 1회 만에 난리 난 '{clean_t[:14]}' 핵심",
-            f"관계자가 밝힌 '{clean_t[:14]}' 결정적 비하인드",
-            f"실시간 화제 모은 '{clean_t[:14]}' 총정리"
-        ]
+        return random.sample(random_fallbacks, 5)
 
+    # 창의적이고 자극적인 후킹 카피를 유도하는 실전 프롬프트
     prompt = f"""
-    당신은 인스타그램 트렌드 뉴스 계정의 수석 카피라이터입니다.
-    기사 본문 내용을 정확하게 파악하고, 독자의 시선을 사로잡는 강력한 후킹 제목 5가지를 추천해 주세요.
-    1. 🎯 타겟 지목형 ("내 얘기잖아?" 싶은 카피)
-    2. 🚫 금지/경고형 ("절대 ~하지 마세요" 식의 호기심 자극 카피)
-    3. 🔢 숫자/구체성형 (숫자로 궁금증 극대화)
-    4. 📖 스토리텔링형 (비하인드/반전 카피)
-    5. ❤️ 공감 자극형 카피
+    당신은 인스타그램 100만 팔로워 이슈 매거진의 탑티어 카피라이터입니다.
+    기사 내용을 바탕으로, 스크롤을 내리던 사람의 손가락을 0.5초 만에 멈추게 만드는 '초강력 후킹 제목' 5개를 작성하세요.
 
-    [작성 규칙]:
-    - 기사 내용에 없는 허위 사실을 지어내지 마세요.
-    - 기자 이름, 날짜, 언론사명, 대괄호 []는 제목 본문 안에 절대 포함하지 마세요.
-    - 1줄당 14자~20자 내외로 작성하세요.
+    [카피라이팅 스타일 지침 - 반드시 적용]:
+    1. 도발/경고형: "절대 혼자 보지 마세요", "~인 줄 알았는데 충격 반전"
+    2. 공감/결핍형: "~아직도 모르는 사람 없죠?", "이거 보고 소름 돋았습니다"
+    3. 비밀/폭로형: "관계자들만 알던 비하인드", "결국 수면 위로 드러난 진실"
+    4. 숫자/디테일: "단 10초 만에", "시청률 3배 폭등한 결정적 장면"
+    5. 따옴표 인용형: "진짜 미쳤다 소리 절로 나오는", "이 조합이 실화냐고 난리 난"
+
+    [주의 사항]:
+    - 뻔하고 진부한 어휘(총정리, 화제, 집중 조명, 핵심 등)는 절대 사용 금지.
+    - 기자명, 날짜, 언론사명, [ ] 대괄호는 제목에 절대 포함하지 마세요.
+    - 1줄당 14자~20자 내외로 화면에 강렬하게 꽂히도록 작성하세요.
+    - 매번 호출될 때마다 완전히 새로운 어휘와 파격적인 관점을 시도하세요.
 
     기사 제목: {clean_t}
-    기사 본문 내용: {text[:1500]}
+    기사 본문 내용:
+    {text[:1500]}
     """
+
     for model_name in FALLBACK_MODELS:
         try:
             res = client.models.generate_content(
@@ -231,7 +247,7 @@ def generate_ai_copies(title, text):
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=HeadlineCandidates,
-                    temperature=0.7
+                    temperature=0.95  # 매 시도마다 문구가 다채롭게 바뀌도록 상향
                 )
             )
             data = json.loads(res.text)
@@ -241,71 +257,31 @@ def generate_ai_copies(title, text):
         except Exception:
             continue
 
-    return [
-        f"'{clean_t[:16]}' 아직 모르시는 분들 꼭 보세요",
-        f"절대 '{clean_t[:16]}' 그냥 넘기지 마세요",
-        f"단 1회 만에 난리 난 '{clean_t[:14]}' 핵심",
-        f"관계자가 밝힌 '{clean_t[:14]}' 결정적 비하인드",
-        f"실시간 화제 모은 '{clean_t[:14]}' 총정리"
-    ]
+    return random.sample(random_fallbacks, 5)
 
 def generate_news_content(title, text):
     clean_t = sanitize_korean_text(title)
     
-    raw_sentences = [sanitize_korean_text(s) for s in re.split(r'(?<=[.?!])\s+', text)]
-    valid_sentences = [
-        s for s in raw_sentences 
-        if len(s) >= 25 and not any(kw in s for kw in ["기자", "스튜디오", "연출", "극본", "배급", "사진="])
-    ]
-    fact_1 = valid_sentences[0] if len(valid_sentences) > 0 else f"{clean_t} 관련 소식이 전해졌습니다."
-    fact_2 = valid_sentences[1] if len(valid_sentences) > 1 else "핵심 내용과 쟁점에 관심이 집중되고 있습니다."
-    fact_3 = valid_sentences[2] if len(valid_sentences) > 2 else "이후 전개와 여론 반응에 이목이 쏠립니다."
-
-    fallback_result = {
-        "card_subcopy": f"{fact_1} {fact_2}"[:95],
-        "image_prompt": "korean doctor surgery room intense drama scene cinematic lighting",
-        "empathy": (
-            f"🔥 {clean_t}\n\n"
-            f"📌 핵심 사건 요약\n"
-            f"- {fact_1}\n"
-            f"- {fact_2}\n\n"
-            f"이 소식 접하고 마음 한구석이 찌릿하셨던 분들 많으시죠? 저 역시 깊은 인상을 받았습니다.\n"
-            f"여러분의 생각은 어떠신가요? 댓글로 이야기 들려주세요 ❤️\n\n"
-            f"#뉴스 #이슈 #트렌드"
-        ),
-        "vote": (
-            f"🔥 {clean_t}\n\n"
-            f"📌 핵심 쟁점 브리핑\n"
-            f"• 상황: {fact_1}\n"
-            f"• 대립 포인트: {fact_2}\n\n"
-            f"지금 온라인에서도 의견이 크게 엇갈리고 있습니다.\n\n"
-            f"👉 A. 충분히 납득되고 사이다다\n"
-            f"👉 B. 조금 더 신중하게 지켜봐야 한다\n\n"
-            f"여러분의 솔직한 생각은? 댓글로 A 또는 B를 남겨주세요! 👇\n\n"
-            f"#토론 #투표 #이슈"
-        ),
-        "explain": (
-            f"📌 {clean_t} 핵심 3줄 정리\n\n"
-            f"1️⃣ {fact_1}\n"
-            f"2️⃣ {fact_2}\n"
-            f"3️⃣ {fact_3}\n\n"
-            f"놓치지 않도록 나중에 볼 수 있게 [저장]해 두세요 🔖\n\n"
-            f"#정보요약 #뉴스정리 #트렌드이슈"
-        )
-    }
-
-    if not client:
-        return fallback_result
-
     prompt = f"""
-    당신은 인스타그램 전문 에디터입니다. 아래 기사 본문의 '구체적인 팩트와 정보'를 정확히 요약하여 다음 5가지 요소를 작성하세요.
-    - 기자명, 날짜, 언론사명 같은 불필요한 메타데이터는 제외하고 순수 사건/콘텐츠 팩트만 담으세요.
+    당신은 인스타그램 트렌드 뉴스 수석 에디터입니다. 아래 기사에서 대중이 가장 흥미로워할 '핵심 도파민 포인트'를 짚어 작성하세요.
+    뻔한 줄거리 요약이 아니라, 왜 사람들이 열광하거나 논란인지 구체적인 사실을 바탕으로 작성해야 합니다.
 
-    1. card_subcopy: 피드 카드 1장에 들어갈 핵심 본문 요약 (마침표로 끝나는 완결된 1~2개 문장, 70~90자 내외).
-    2. image_prompt: 이 기사 배경으로 어울리는 이미지를 AI가 생성할 수 있는 상세한 영어 프롬프트 (예: "a charismatic female doctor in white gown hospital drama cinematic realistic 8k").
-    3. empathy (공감형): 기사의 핵심 상황/팩트를 먼저 명확히 2~3줄로 설명한 뒤, 독자의 감정을 건드려 공감 댓글을 유도.
-    4. vote (투표형): 기사의 핵심 쟁점과 대립 상황을 팩트 기반으로 정리한 뒤, 'A vs B' 양자택일 질문 제시.
-    5. explain (설명형): 기사 내용을 바탕으로 1, 2, 3번으로 나눈 핵심 요약 브리핑 및 저장 유도.
+    1. card_subcopy:
+       - 피드 1장 카드에 들어갈 본문 요약 (70~90자).
+       - "누가 어떤 파격적인 상황/행동을 했는지 + 여론의 반응"을 마침표 1~2개 완결 문장으로 임팩트 있게 서술하세요.
+       - 제작사, 기자 이름, 단순 방영 일정 같은 지루한 정보는 절대 금지.
+
+    2. image_prompt:
+       - 배경으로 쓸 고화질 시네마틱 이미지 생성용 영어 프롬프트 (인물/상황 중심, 8k cinematic lighting).
+
+    3. empathy (공감형):
+       - 사건의 실체와 핵심 장면을 생생하게 설명한 뒤 독자의 일상과 감정을 자극하는 인스타 본문 (이모지 포함).
+
+    4. vote (투표형):
+       - "A(완전 호감/사이다) vs B(선 넘었다/지켜봐야 함)"처럼 댓글 창에서 밤새 토론할 수 있는 극단적인 선택지 제시.
+
+    5. explain (설명형):
+       - 1️⃣ 팩트 체킹 2️⃣ 숨겨진 반전 3️⃣ 앞으로의 파장 구조로 정리한 저장 유도형 본문.
 
     기사 제목: {clean_t}
     기사 본문 내용:
@@ -320,21 +296,28 @@ def generate_news_content(title, text):
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=ContentSummaryResponse,
-                    temperature=0.5
+                    temperature=0.85
                 )
             )
             data = json.loads(res.text)
             return {
-                "card_subcopy": sanitize_korean_text(data.get("card_subcopy", fallback_result["card_subcopy"])),
-                "image_prompt": data.get("image_prompt", fallback_result["image_prompt"]),
-                "empathy": data.get("empathy", fallback_result["empathy"]),
-                "vote": data.get("vote", fallback_result["vote"]),
-                "explain": data.get("explain", fallback_result["explain"])
+                "card_subcopy": sanitize_korean_text(data.get("card_subcopy", "")),
+                "image_prompt": data.get("image_prompt", "dramatic cinematic scene"),
+                "empathy": data.get("empathy", ""),
+                "vote": data.get("vote", ""),
+                "explain": data.get("explain", "")
             }
         except Exception:
             continue
 
-    return fallback_result
+    # 폴백 처리
+    return {
+        "card_subcopy": f"기존의 상식을 뒤엎는 파격적인 캐릭터 변신과 거침없는 전개로 공개 직후 커뮤니티가 발칵 뒤집혔습니다.",
+        "image_prompt": "dramatic cinematic scene, intense lighting, 8k",
+        "empathy": f"🔥 {clean_t}\n\n이 소식 듣고 다들 어떻게 생각하셨나요? 실시간 반응이 정말 뜨겁습니다.",
+        "vote": f"🔥 {clean_t}\n\n👉 A. 완벽하게 사이다다\n👉 B. 조금 과한 것 같다\n\n여러분의 선택을 댓글로 남겨주세요!",
+        "explain": f"📌 {clean_t} 핵심 정리\n\n1️⃣ 화제의 배경\n2️⃣ 대중의 반응\n3️⃣ 향후 전망"
+    }
 
 # =============================================
 # 단일 카드 렌더링 엔진 (1080x1350)
